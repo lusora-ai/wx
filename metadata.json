@@ -1,0 +1,6 @@
+{
+  "name": "小顺 AI 内容工作台",
+  "description": "面向中文内容运营者的海外 AI 资讯处理与多受众排版管理系统，适配微信公众号生态",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
