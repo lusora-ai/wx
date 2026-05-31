@@ -26,6 +26,7 @@ import { usePublishTasks } from './hooks/usePublishTasks';
 import { useSettings } from './hooks/useSettings';
 import { useDashboard } from './hooks/useDashboard';
 import { dailyApi } from './api/daily';
+import { automationApi } from './api/automation';
 import type { ContentTask } from './api/tasks';
 import { SourceFeed, TopicArticle, AiDraft, SystemLog, ModelSetting, AppConfig, SyncTask, VisualPlan } from './types';
 
@@ -272,6 +273,24 @@ export default function App() {
   const handleToggleSourceStatus = (id: string) => runAction('更新内容源状态中...', () => sourcesApi.update(id, { status: 'pending' }));
   const handleVerifyCheckSource = (id: string) => runAction('抓取内容源中...', () => sourcesApi.fetch(id));
   const handleFetchAllSources = () => runAction('抓取全部 active RSS/URL 源中...', () => sourcesApi.fetchAll());
+  const handleRunAutomation = async (fillWechat: boolean) => {
+    setNotice(fillWechat ? '正在执行主线流水线并填入微信...' : '正在执行主线流水线...');
+    const result = await automationApi.run({
+      audience: 'officeWorker',
+      targetLength: 900,
+      fillWechat,
+    });
+    await refreshAll();
+    if (result.topicId) setSelectedTopic(result.topicId);
+    if (result.articleId) setSelectedArticleIdForWorkshop(result.articleId);
+    if (result.publishTaskId) {
+      setSelectedPublishTaskId(result.publishTaskId);
+      setSelectedDraftIdForPublish(result.topicId || result.articleId);
+      setTab(result.status === 'blocked' && !result.publishTaskId ? 'workshop' : 'publish');
+    }
+    setNotice(result.message);
+    return result;
+  };
   const handleGenerateSourceItemTopic = (id: string) => runAction('正在从抓取内容生成选题...', async () => {
     const topic = await sourceItemsApi.generateTopic(id);
     setSelectedTopic(topic.id);
@@ -460,7 +479,7 @@ export default function App() {
           </div>
         )}
         <div id="viewport-pane" className="flex-1 overflow-y-auto p-8 bg-apple-bg">
-          {activeTab === 'dashboard' && <DashboardView sources={sources} topics={topics} drafts={drafts} logs={logs} appConfig={appConfig} setActiveTab={setTab} setSelectedTopicIdForWorkshop={setSelectedTopic} onTaskAction={handleTaskAction} onFetchToday={() => runAction('一键抓取今日内容中...', () => dailyApi.fetchToday())} />}
+          {activeTab === 'dashboard' && <DashboardView sources={sources} topics={topics} drafts={drafts} logs={logs} appConfig={appConfig} setActiveTab={setTab} setSelectedTopicIdForWorkshop={setSelectedTopic} onTaskAction={handleTaskAction} onFetchToday={() => runAction('一键抓取今日内容中...', () => dailyApi.fetchToday())} onRunAutomation={handleRunAutomation} />}
           {activeTab === 'sources' && <SourceCenterView sources={sources} focusedSourceId={focusedSourceId} focusedSourceItemId={focusedSourceItemId} onAddSource={handleAddSource} onDeleteSource={handleDeleteSource} onPermanentDeleteSource={handlePermanentDeleteSource} onToggleStatus={handleToggleSourceStatus} isRefreshing={isRefreshingFeeds} onTriggerCheck={handleVerifyCheckSource} onFetchAllSources={handleFetchAllSources} onGenerateTopic={handleGenerateTopic} onGenerateSourceItemTopic={handleGenerateSourceItemTopic} />}
           {activeTab === 'topics' && <TopicWorkbenchView topics={topics} drafts={drafts} selectedTopicId={selectedTopicIdForQueue} onPushToWorkshop={handlePushToWorkshop} onArchiveTopic={handleArchiveTopic} onOpenDraftLibrary={handleOpenDraftLibrary} setActiveTab={setTab} setSelectedTopicIdForWorkshop={setSelectedTopic} />}
           {activeTab === 'workshop' && <AiWorkshopView topics={topics} drafts={drafts} selectedTopicId={selectedTopicIdForWorkshop} selectedArticleId={selectedArticleIdForWorkshop} setSelectedTopicId={setSelectedTopic} modelSetting={modelSetting} onSaveDraft={handleSaveDraftToLibrary} onGenerateArticle={handleGenerateArticle} onCreatePublishPackage={handleCreatePublishPackage} setActiveTab={setTab} />}

@@ -15,6 +15,7 @@ import { dailyRouter } from './routes/daily';
 import { sourcePresetsRouter } from './routes/sourcePresets';
 import { tasksRouter } from './routes/tasks';
 import { wechatRouter } from './routes/wechat';
+import { automationRouter } from './routes/automation';
 
 const app = express();
 const port = Number(process.env.API_PORT || 8787);
@@ -44,6 +45,7 @@ app.use('/api/daily', dailyRouter);
 app.use('/api/source-presets', sourcePresetsRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/wechat', wechatRouter);
+app.use('/api/automation', automationRouter);
 
 app.listen(port, () => {
   console.log(`Xiaoshun API listening on http://localhost:${port}`);

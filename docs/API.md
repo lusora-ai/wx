@@ -1,5 +1,14 @@
 # API
 
+## Phase 16 Mainline Automation API
+
+- `POST /api/automation/run` manually runs one PRD-bounded production pipeline: collect active content sources, select one qualified `SourceItem`, generate/reuse one `Topic`, generate/reuse one `Article`, run `ReviewLog.check`, create/reuse a dry-run `PublishTask`, and optionally call WeChat `inject-poc`.
+- Request body accepts `sourceId`, `sourceItemId`, `topicId`, or `articleId` to start from a specific point; otherwise the pipeline fetches active local sources and selects the highest quality unused candidate.
+- `audience` defaults to `officeWorker`; the pipeline generates at most one article per run.
+- `fillWechat:true` only fills the WeChat editor through `POST /api/wechat/drafts/inject-poc`. It never calls `save-poc`, never saves a draft, never mass publishes, and never schedules publishing.
+- HIGH quality risks block package creation and WeChat fill. MEDIUM/LOW risks are returned in `quality.issues` but do not block.
+- Response includes ordered `steps`, `sourceItemId`, `topicId`, `articleId`, `publishTaskId`, optional `wechatRunId`, and a `boundary` object proving no save/publish/image generation/official WeChat API was attempted.
+
 ## Phase 15 WeChat Run API Rules
 
 - `POST /api/wechat/drafts/inject-poc` now returns `runId` and diagnostics containing `keepBrowserOpen` and `keepAliveUntil`. On success the active run status is `waiting_user_review`.
@@ -133,6 +142,7 @@ Wechat PoC error codes: `WECHAT_DISABLED`, `WECHAT_PLAYWRIGHT_NOT_INSTALLED`, `W
 - `GET /api/fetch-tasks/:id`
 - `POST /api/fetch-tasks/source/:sourceId`
 - `POST /api/fetch-tasks/all`
+- `POST /api/automation/run`
 
 `POST /api/publish/wechat/playwright` 是旧占位接口，保留为兼容并固定返回 `NOT_IMPLEMENTED`。Phase 10 的微信自动化 PoC 使用 `/api/wechat/*`，默认仍只做 `poc_check`，不保存真实微信草稿。
 
