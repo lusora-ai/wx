@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import DashboardView from './components/DashboardView';
@@ -13,464 +13,461 @@ import AiWorkshopView from './components/AiWorkshopView';
 import DraftLibraryView from './components/DraftLibraryView';
 import PublishCenterView from './components/PublishCenterView';
 import SettingsView from './components/SettingsView';
+import { sourcesApi, type CreateSourceInput, type SourceRecord } from './api/sources';
+import { topicsApi, type TopicRecord } from './api/topics';
+import { articlesApi, type ArticleRecord, type Audience } from './api/articles';
+import { publishApi, type PublishTaskRecord } from './api/publish';
+import { settingsApi } from './api/settings';
+import { sourceItemsApi } from './api/sourceItems';
+import { useSources } from './hooks/useSources';
+import { useTopics } from './hooks/useTopics';
+import { useArticles } from './hooks/useArticles';
+import { usePublishTasks } from './hooks/usePublishTasks';
+import { useSettings } from './hooks/useSettings';
+import { useDashboard } from './hooks/useDashboard';
+import { dailyApi } from './api/daily';
+import type { ContentTask } from './api/tasks';
+import { SourceFeed, TopicArticle, AiDraft, SystemLog, ModelSetting, AppConfig, SyncTask, VisualPlan } from './types';
 
-import { 
-  SourceFeed, 
-  TopicArticle, 
-  AiDraft, 
-  SystemLog, 
-  ModelSetting, 
-  AppConfig, 
-  SyncTask 
-} from './types';
+const audienceLabels: Record<Audience, string> = {
+  officeWorker: '打工人',
+  student: '大学生',
+  freelancer: '自由职业者',
+};
 
-import { 
-  initialSources, 
-  initialTopics, 
-  initialDrafts, 
-  initialLogs, 
-  defaultModelSetting, 
-  initialConfig 
-} from './data/mockData';
+function formatDate(value?: string | null) {
+  if (!value) return '从未检查';
+  return new Date(value).toISOString().replace('T', ' ').substring(0, 16);
+}
+
+function mapSource(source: SourceRecord): SourceFeed {
+  return {
+    id: source.id,
+    name: source.name || source.title || '未命名内容源',
+    title: source.title || undefined,
+    url: source.url || '',
+    rawText: source.rawText,
+    type: source.type,
+    status: source.status === 'archived' ? 'archived' : source.status === 'failed' ? 'error' : 'active',
+    lastChecked: formatDate(source.lastChecked || source.updatedAt),
+    articleCount: source.articleCount,
+    category: source.type === 'manual' ? '手动录入' : source.type === 'url' ? 'URL 源' : 'RSS 源',
+    region: source.region || 'global',
+    items: source.items?.map((item) => ({ id: item.id, title: item.title, url: item.url, status: item.status, createdAt: item.createdAt })) || [],
+  };
+}
+
+function mapTopic(topic: TopicRecord): TopicArticle {
+  return {
+    id: topic.id,
+    originalTitle: topic.originalTitle || topic.title,
+    originalUrl: topic.originalUrl || topic.source?.url || '',
+    sourceId: topic.sourceId || '',
+    sourceItemId: topic.sourceItemId || undefined,
+    sourceName: topic.source?.name || topic.source?.title || '手动内容源',
+    pullTime: formatDate(topic.createdAt),
+    translatedTitle: topic.translatedTitle || topic.title,
+    title: topic.title,
+    angle: topic.angle || undefined,
+    summary: topic.summary,
+    rawContent: topic.rawContent || '',
+    englishOutline: [...(topic.uncertainClaims || []), ...(topic.suggestedTitles || [])],
+    chineseOutline: topic.facts || [],
+    facts: topic.facts || [],
+    uncertainClaims: topic.uncertainClaims || [],
+    suggestedTitles: topic.suggestedTitles || [],
+    targetAudiences: topic.targetAudiences || [],
+    category: topic.category || 'AI 资讯',
+    readingTime: topic.readingTime || '3 min',
+    status: topic.status as TopicArticle['status'],
+    hotScore: topic.hotScore || 75,
+  };
+}
+
+function emptyVersion(label: string) {
+  return { title: `${label}版本待生成`, excerpt: '请先在 AI 写作工坊生成文章。', content: '', wordCount: 0 };
+}
+
+function parseArticleVisualPlan(value?: string | null): VisualPlan | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as VisualPlan;
+  } catch {
+    return null;
+  }
+}
+
+function mapArticlesToDrafts(articles: ArticleRecord[], topics: TopicArticle[]): AiDraft[] {
+  const grouped = new Map<string, ArticleRecord[]>();
+  for (const article of articles) {
+    grouped.set(article.topicId || article.id, [...(grouped.get(article.topicId || article.id) || []), article]);
+  }
+
+  return Array.from(grouped.values()).map((items) => {
+    const first = items[0];
+    const topic = topics.find((item) => item.id === first.topicId);
+    const byAudience: Partial<Record<Audience, ArticleRecord>> = {};
+    for (const item of items) {
+      if (!byAudience[item.audience]) byAudience[item.audience] = item;
+    }
+    const selectedAudience = (first.audience || 'officeWorker') as Audience;
+    const versions = {
+      officeWorker: byAudience.officeWorker
+        ? { title: byAudience.officeWorker.title, excerpt: byAudience.officeWorker.summary || '', content: byAudience.officeWorker.markdown, wordCount: byAudience.officeWorker.markdown.length }
+        : emptyVersion('打工人'),
+      student: byAudience.student
+        ? { title: byAudience.student.title, excerpt: byAudience.student.summary || '', content: byAudience.student.markdown, wordCount: byAudience.student.markdown.length }
+        : emptyVersion('大学生'),
+      freelancer: byAudience.freelancer
+        ? { title: byAudience.freelancer.title, excerpt: byAudience.freelancer.summary || '', content: byAudience.freelancer.markdown, wordCount: byAudience.freelancer.markdown.length }
+        : emptyVersion('自由职业者'),
+    };
+
+    return {
+      id: first.topicId || first.id,
+      articleIds: {
+        officeWorker: byAudience.officeWorker?.id,
+        student: byAudience.student?.id,
+        freelancer: byAudience.freelancer?.id,
+      },
+      imageSlots: {
+        officeWorker: byAudience.officeWorker?.imageSlots || [],
+        student: byAudience.student?.imageSlots || [],
+        freelancer: byAudience.freelancer?.imageSlots || [],
+      },
+      visualPlans: {
+        officeWorker: parseArticleVisualPlan(byAudience.officeWorker?.visualPlanJson),
+        student: parseArticleVisualPlan(byAudience.student?.visualPlanJson),
+        freelancer: parseArticleVisualPlan(byAudience.freelancer?.visualPlanJson),
+      },
+      topicId: first.topicId || '',
+      originalTitle: topic?.originalTitle || first.topic?.originalTitle || first.title,
+      translatedTitle: topic?.translatedTitle || first.topic?.translatedTitle || first.title,
+      category: topic?.category || first.topic?.category || 'AI 资讯',
+      selectedAudience,
+      status: first.status === 'draft' ? 'pending_review' : (first.status as AiDraft['status']),
+      reviewScore: first.qualityScore || 0,
+      reviewerFeedback: first.reviewerFeedback || '',
+      createdAt: formatDate(first.createdAt),
+      lastEdited: formatDate(first.updatedAt),
+      tokenCost: items.reduce((sum, item) => sum + (item.tokenUsage || 0), 0),
+      versions,
+    };
+  });
+}
+
+function mapTask(task: PublishTaskRecord): SyncTask {
+  return {
+    id: task.id,
+    draftId: task.article?.topicId || task.articleId,
+    articleId: task.articleId,
+    title: task.title || task.article?.title || 'dry-run 发布包任务',
+    progress: task.status === 'success' ? 100 : task.status === 'failed' ? 100 : 20,
+    status: task.status === 'success' ? 'completed' : task.status === 'failed' ? 'failed' : 'queued',
+    message: task.status === 'success' ? '发布包已生成，dry-run 已记录，等待手动发布。' : task.errorMessage || 'dry-run 任务处理中。',
+    timestamp: formatDate(task.createdAt).slice(11),
+    syncedVersion: (task.syncedVersion || task.article?.audience || 'officeWorker') as Audience,
+    outputHtml: task.outputHtml || undefined,
+    outputMarkdown: task.outputMarkdown || undefined,
+    packageJson: task.packageJson || undefined,
+  };
+}
 
 export default function App() {
-  // Global States loaded from mockup models
-  const [sources, setSources] = useState<SourceFeed[]>(() => {
-    const saved = localStorage.getItem('xs_sources');
-    return saved ? JSON.parse(saved) : initialSources;
-  });
+  const sourcesResource = useSources();
+  const topicsResource = useTopics();
+  const articlesResource = useArticles();
+  const publishResource = usePublishTasks();
+  const settingsResource = useSettings();
+  const dashboardResource = useDashboard();
 
-  const [topics, setTopics] = useState<TopicArticle[]>(() => {
-    const saved = localStorage.getItem('xs_topics');
-    return saved ? JSON.parse(saved) : initialTopics;
-  });
-
-  const [drafts, setDrafts] = useState<AiDraft[]>(() => {
-    const saved = localStorage.getItem('xs_drafts');
-    return saved ? JSON.parse(saved) : initialDrafts;
-  });
-
-  const [logs, setLogs] = useState<SystemLog[]>(() => {
-    const saved = localStorage.getItem('xs_logs');
-    return saved ? JSON.parse(saved) : initialLogs;
-  });
-
-  const [appConfig, setAppConfig] = useState<AppConfig>(() => {
-    const saved = localStorage.getItem('xs_app_config');
-    return saved ? JSON.parse(saved) : initialConfig;
-  });
-
-  const [modelSetting, setModelSetting] = useState<ModelSetting>(() => {
-    const saved = localStorage.getItem('xs_model_setting');
-    return saved ? JSON.parse(saved) : defaultModelSetting;
-  });
-
-  // Navigation tab switcher state
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
-
-  // Multi-view sync values helper (stores handoff references)
+  const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem('xs_active_tab') || 'dashboard');
   const [selectedTopicIdForWorkshop, setSelectedTopicIdForWorkshop] = useState<string | null>(null);
+  const [selectedTopicIdForQueue, setSelectedTopicIdForQueue] = useState<string | null>(null);
+  const [selectedArticleIdForWorkshop, setSelectedArticleIdForWorkshop] = useState<string | null>(null);
+  const [focusedSourceId, setFocusedSourceId] = useState<string | null>(null);
+  const [focusedSourceItemId, setFocusedSourceItemId] = useState<string | null>(null);
+  const [selectedDraftIdForLibrary, setSelectedDraftIdForLibrary] = useState<string | null>(null);
   const [selectedDraftIdForPublish, setSelectedDraftIdForPublish] = useState<string | null>(null);
-
-  // Synchronizing task queue indicators
-  const [syncTasks, setSyncTasks] = useState<SyncTask[]>([]);
+  const [selectedPublishTaskId, setSelectedPublishTaskId] = useState<string | null>(() => localStorage.getItem('xs_publish_task_id') || null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [isRefreshingFeeds, setIsRefreshingFeeds] = useState(false);
 
-  // Auto save database parameters into Client-side storage 
   useEffect(() => {
-    localStorage.setItem('xs_sources', JSON.stringify(sources));
-    localStorage.setItem('xs_topics', JSON.stringify(topics));
-    localStorage.setItem('xs_drafts', JSON.stringify(drafts));
-    localStorage.setItem('xs_logs', JSON.stringify(logs));
-    localStorage.setItem('xs_app_config', JSON.stringify(appConfig));
-    localStorage.setItem('xs_model_setting', JSON.stringify(modelSetting));
-  }, [sources, topics, drafts, logs, appConfig, modelSetting]);
+    if (selectedPublishTaskId) {
+      localStorage.setItem('xs_publish_task_id', selectedPublishTaskId);
+    } else {
+      localStorage.removeItem('xs_publish_task_id');
+    }
+  }, [selectedPublishTaskId]);
 
-  // Append new system records
-  const addSystemLog = (module: string, action: string, type: SystemLog['type'], tokensUsed?: number) => {
-    const newLog: SystemLog = {
-      id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      time: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      module,
-      action,
-      operator: '顺子老师 (主理人)',
-      type,
-      tokensUsed
-    };
-    setLogs(prev => [newLog, ...prev]);
+  const sources = useMemo(() => sourcesResource.data.map(mapSource), [sourcesResource.data]);
+  const topics = useMemo(() => topicsResource.data.map(mapTopic), [topicsResource.data]);
+  const drafts = useMemo(() => mapArticlesToDrafts(articlesResource.data, topics), [articlesResource.data, topics]);
+  const syncTasks = useMemo(() => publishResource.data.map(mapTask), [publishResource.data]);
+  const logs: SystemLog[] = useMemo(() => dashboardResource.data.recentLogs.map((log) => ({
+    id: log.id,
+    time: formatDate(log.createdAt),
+    module: log.module,
+    action: log.action,
+    operator: log.operator || 'system',
+    type: log.type,
+    tokensUsed: log.tokensUsed || undefined,
+  })), [dashboardResource.data.recentLogs]);
 
-    // Track tokens cost if appropriate
-    if (tokensUsed) {
-      setAppConfig(prev => ({
-        ...prev,
-        monthlyTokenUsed: prev.monthlyTokenUsed + tokensUsed
-      }));
+  const appConfig: AppConfig = {
+    wechatAppId: '',
+    wechatAppSecret: '',
+    wechatIsConfigured: false,
+    autoSyncActive: false,
+    alertOnTokenLimit: true,
+    monthlyTokenLimit: 10000000,
+    monthlyTokenUsed: dashboardResource.data.tokenUsedToday,
+  };
+
+  const modelSetting: ModelSetting = {
+    provider: settingsResource.data.llmProvider === 'deepseek' ? 'DeepSeek' : 'Kimi',
+    modelId: settingsResource.data.llmModel,
+    temperature: 0.7,
+    maxTokens: 4096,
+    systemPrompt: '服务端 AI 内容主编，严格基于来源生成。',
+    officeWorkerPrompt: '打工人：关注职场效率、岗位变化、AI 工具实操。',
+    studentPrompt: '大学生：关注学习、求职、入门路径。',
+    freelancerPrompt: '自由职业者：关注接单、商业化、个人品牌。',
+  };
+
+  const setTab = (tab: string) => {
+    localStorage.setItem('xs_active_tab', tab);
+    setActiveTab(tab);
+  };
+
+  const setSelectedTopic = (id: string | null) => {
+    setSelectedTopicIdForWorkshop(id);
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([
+      sourcesResource.refresh(),
+      topicsResource.refresh(),
+      articlesResource.refresh(),
+      publishResource.refresh(),
+      dashboardResource.refresh(),
+    ]);
+  };
+
+  const runAction = async (message: string, action: () => Promise<unknown>) => {
+    setNotice(message);
+    try {
+      await action();
+      await refreshAll();
+      setNotice('操作已完成');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '操作失败');
     }
   };
 
-  // 1. Source Feed Actions
-  const handleAddSource = (sourceData: Omit<SourceFeed, 'id' | 'articleCount' | 'lastChecked'>) => {
-    const newSource: SourceFeed = {
-      ...sourceData,
-      id: `src-${Date.now()}`,
-      articleCount: 0,
-      lastChecked: '从未检查'
-    };
-    setSources(prev => [...prev, newSource]);
-    addSystemLog('采集源管理', `成功追加了新的订阅通道 [${sourceData.name}]，等待首期资讯验证获取。`, 'success');
-  };
-
-  const handleDeleteSource = (id: string) => {
-    const targetSource = sources.find(s => s.id === id);
-    setSources(prev => prev.filter(s => s.id !== id));
-    addSystemLog('采集源管理', `彻底移除了采集订阅通道 [${targetSource?.name || '未知源'}]。`, 'warning');
-  };
-
-  const handleToggleSourceStatus = (id: string) => {
-    setSources(prev => prev.map(s => {
-      if (s.id === id) {
-        const nextStatus: SourceFeed['status'] = s.status === 'active' ? 'inactive' : 'active';
-        addSystemLog('采集源管理', `切换订阅源 [${s.name}] 的可用状态为 [${nextStatus === 'active' ? '正常启用' : '挂起暂停'}]。`, 'info');
-        return { ...s, status: nextStatus };
-      }
-      return s;
-    }));
-  };
-
-  const handleVerifyCheckSource = (id: string) => {
-    // Simulates validating an RSS feed with a direct ping
-    setSources(prev => prev.map(s => {
-      if (s.id === id) {
-        addSystemLog('采集源监控', `验证连接订阅配置: 对 [${s.name}] 发起试探性 Ping 检查...`, 'info');
-        setTimeout(() => {
-          setSources(cur => cur.map(now => {
-            if (now.id === id) {
-              addSystemLog('采集源中心', `采集成功：[${now.name}] 通道校验合格，增量抓取 0 篇新内容。`, 'success');
-              return {
-                ...now,
-                status: 'active',
-                lastChecked: new Date().toISOString().replace('T', ' ').substring(0, 16)
-              };
-            }
-            return now;
-          }));
-        }, 1000);
-        return s;
-      }
-      return s;
-    }));
-  };
+  const handleAddSource = (sourceData: CreateSourceInput) => runAction('保存内容源中...', () => sourcesApi.create(sourceData));
+  const handleDeleteSource = (id: string) => runAction('归档内容源中...', () => sourcesApi.archive(id));
+  const handlePermanentDeleteSource = (id: string) => runAction('永久删除内容源中...', () => sourcesApi.permanentDelete(id));
+  const handleToggleSourceStatus = (id: string) => runAction('更新内容源状态中...', () => sourcesApi.update(id, { status: 'pending' }));
+  const handleVerifyCheckSource = (id: string) => runAction('抓取内容源中...', () => sourcesApi.fetch(id));
+  const handleFetchAllSources = () => runAction('抓取全部 active RSS/URL 源中...', () => sourcesApi.fetchAll());
+  const handleGenerateSourceItemTopic = (id: string) => runAction('正在从抓取内容生成选题...', async () => {
+    const topic = await sourceItemsApi.generateTopic(id);
+    setSelectedTopic(topic.id);
+    setTab('topics');
+  });
+  const handleGenerateTopic = (id: string) => runAction('正在提炼事实点...', async () => {
+    const topic = await topicsApi.generate(id);
+    setSelectedTopic(topic.id);
+    setTab('topics');
+  });
 
   const handleRefreshGlobalFeeds = () => {
     setIsRefreshingFeeds(true);
-    addSystemLog('采集调度', '点击开始轮询拉取今日海外各大科技资讯站点 RSS 文章...', 'info');
-
-    setTimeout(() => {
-      setIsRefreshingFeeds(false);
-
-      // Simulates adding 1 more topic from Hacker News summary to indicate growth
-      const newBonusTopic: TopicArticle = {
-        id: `topic-${Date.now()}`,
-        originalTitle: 'NVIDIA Omniverse upgrades with Gemini models: Interactive CAD 3D editing inside VR space',
-        originalUrl: 'https://developer.nvidia.com/omniverse',
-        sourceId: 'src-4',
-        sourceName: 'NVIDIA Developer Blog',
-        pullTime: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        translatedTitle: '英伟达 Omniverse 联动 Gemini：支持虚拟现实 VR 空间下智能 3D 精细编排',
-        summary: '英伟达宣布完成 Omniverse 主物理引擎与轻量大语言模型 Gemini API 深度绑定。工程师现在可以采用纯自然语言，实时生成、调度并测试带有高能物理刚性动力学模拟的 CAD 数字孪生，极大释放工业模型加工效率。',
-        rawContent: 'NVIDIA today unlocked seamless real-time neural 3D editing integrations. Gemini models parse semantic layouts inside VR goggles, translating conversational commands into fine-grained geometric parameters. Spatial computing developers are calling it a landmark shift for rapid industrial asset engineering.',
-        englishOutline: [
-          'Unveiling of NV-Omniverse spatial upgrades.',
-          'The rendering layer: Conversational scene orchestration.',
-          'Safety protocols and multi-user sync benchmarks.'
-        ],
-        chineseOutline: [
-          '英伟达全新空间渲染版本登场。',
-          '交互细节拆讲：如何通过自然语言下达指令实时润饰 CAD 模型。',
-          '工业协同安全系数与网络延时数据。'
-        ],
-        category: '模型发布',
-        readingTime: '3 min',
-        status: 'pending',
-        hotScore: 88
-      };
-
-      setTopics(prev => {
-        // Prevent duplicate appending
-        if (prev.some(t => t.originalTitle.includes('Omniverse'))) return prev;
-        return [newBonusTopic, ...prev];
-      });
-
-      // Update source checklist count
-      setSources(prev => prev.map(s => {
-        if (s.id === 'src-4') {
-          return { ...s, articleCount: s.articleCount + 1, lastChecked: new Date().toISOString().replace('T', ' ').substring(0, 16) };
-        }
-        return { ...s, lastChecked: new Date().toISOString().replace('T', ' ').substring(0, 16) };
-      }));
-
-      addSystemLog('采集源中心', '海外 RSS 定时扫描成功。拉入 1 篇关于 [英伟达CAD 3D立体空间编辑] 的前沿科技选题，首批翻译已推送。', 'success', 3500);
-    }, 1500);
+    runAction('抓取全部 active RSS/URL 源中...', () => sourcesApi.fetchAll()).finally(() => setIsRefreshingFeeds(false));
   };
 
-  // 2. Topic selecting actions
-  const handlePushToWorkshop = (id: string) => {
-    setTopics(prev => prev.map(t => {
-      if (t.id === id) {
-        addSystemLog('选题工作台', `选定最新科技议题并推送至工坊: [${t.translatedTitle}]，已挂入生成队列。`, 'success');
-        return { ...t, status: 'pushed' };
-      }
-      return t;
-    }));
-    setSelectedTopicIdForWorkshop(id);
-    setActiveTab('workshop'); // shift tab
+  const handlePushToWorkshop = (id: string) => runAction('推送到写作工坊中...', async () => {
+    await topicsApi.push(id);
+    setSelectedTopic(id);
+    setTab('workshop');
+  });
+  const handleArchiveTopic = (id: string) => runAction('归档选题中...', () => topicsApi.archive(id));
+  const handleOpenDraftLibrary = (draftId: string) => {
+    setSelectedDraftIdForLibrary(draftId);
+    setTab('drafts');
   };
 
-  const handleArchiveTopic = (id: string) => {
-    setTopics(prev => prev.map(t => {
-      if (t.id === id) {
-        const nextStatus: TopicArticle['status'] = t.status === 'archived' ? 'pending' : 'archived';
-        addSystemLog('选题工作台', `把选题文章 [${t.translatedTitle}] 执行 [${nextStatus === 'archived' ? '标记归档' : '恢复激活'}]。`, 'info');
-        return { ...t, status: nextStatus };
-      }
-      return t;
-    }));
-  };
-
-  // 3. Workshop & saving drafts
-  const handleSaveDraftToLibrary = (updatedDraft: AiDraft) => {
-    setDrafts(prev => {
-      const exists = prev.some(d => d.id === updatedDraft.id);
-      if (exists) {
-        addSystemLog('AI写作工坊', `更新了 AI 图文草稿 [${updatedDraft.versions[updatedDraft.selectedAudience].title.substring(0, 20)}...] 的内容、主编反馈以及多版本。`, 'success', updatedDraft.tokenCost);
-        return prev.map(d => d.id === updatedDraft.id ? updatedDraft : d);
-      } else {
-        addSystemLog('AI写作工坊', `成功将新生成的打工、学生等分众多版本精美草稿保存加入草稿库，主编星级评分待标。`, 'success', updatedDraft.tokenCost);
-        return [updatedDraft, ...prev];
-      }
+  const handleGenerateArticle = async (topicId: string, options: { audience: Audience; tone?: string; targetLength?: number }) => {
+    setNotice(`正在生成${audienceLabels[options.audience]}版本...`);
+    const result = await articlesApi.generate({
+      topicId,
+      audience: options.audience,
+      tone: options.tone,
+      targetLength: options.targetLength,
     });
+    await refreshAll();
+    setSelectedArticleIdForWorkshop(result.article.id);
+    if (result.visualPlanStatus === 'failed') {
+      setNotice('正文已生成，段落配图生成失败，可稍后重试。');
+    } else if (result.visualPlanStatus === 'fallback') {
+      setNotice('正文已生成，Kimi 段落配图超时，已使用 DeepSeek 兜底方案。');
+    } else {
+      setNotice(`正文已生成，已生成 ${result.visualPlan?.imagePromptSet.inlineImages.length ? result.visualPlan.imagePromptSet.inlineImages.length + 2 : 0} 条段落配图提示词。`);
+    }
+    return { article: result.article, visualPlanStatus: result.visualPlanStatus, visualPlanWarnings: result.visualPlanWarnings };
   };
 
-  const handleUpdateDraftStatus = (id: string, status: AiDraft['status'], score?: number, feedback?: string) => {
-    setDrafts(prev => prev.map(d => {
-      if (d.id === id) {
-        const payloadScore = score !== undefined ? score : d.reviewScore;
-        const payloadFeedback = feedback !== undefined ? feedback : d.reviewerFeedback;
-        
-        let logAction = `审核意见录入。草稿 [${d.versions[d.selectedAudience].title.substring(0, 15)}...] 状态标记为 [${status}]`;
-        if (score) {
-          logAction += `，主编给予 [${score}星/优秀] 优质成文评级`;
-        }
-        
-        addSystemLog('内容库中心', logAction, 'success');
-        return { 
-          ...d, 
-          status, 
-          reviewScore: payloadScore, 
-          reviewerFeedback: payloadFeedback,
-          lastEdited: new Date().toISOString().replace('T', ' ').substring(0, 16)
-        };
-      }
-      return d;
-    }));
-  };
-
-  const handleDeleteDraft = (id: string) => {
-    const targetDraft = drafts.find(d => d.id === id);
-    setDrafts(prev => prev.filter(d => d.id !== id));
-    addSystemLog('内容库中心', `把草稿 [${targetDraft?.versions[targetDraft.selectedAudience].title.substring(0, 20)}...] 彻底销毁，缓存数据已抹除。`, 'warning');
-  };
-
-  // 4. Publishing & WeChat syncing (authentically simulated ticker with progress updates)
-  const handleTriggerWechatSync = (draftId: string) => {
-    const targetDraft = drafts.find(d => d.id === draftId);
-    if (!targetDraft) return;
-
-    // Check if task already running to avoid duplications
-    if (syncTasks.some(t => t.draftId === draftId && (t.status === 'syncing' || t.status === 'queued'))) {
+  const handleTaskAction = (task: ContentTask) => {
+    const payload = task.actionPayload;
+    const tab = payload?.tab || task.actionHref;
+    if (task.relatedEntityType === 'source') {
+      setFocusedSourceId(payload?.sourceId || task.relatedEntityId);
+      setFocusedSourceItemId(null);
+      setTab('sources');
       return;
     }
-
-    const taskId = `task-${Date.now()}`;
-    const selectedAudience = targetDraft.selectedAudience;
-    const taskTitle = targetDraft.versions[selectedAudience].title;
-
-    // Add initial queued sync task
-    const initialTask: SyncTask = {
-      id: taskId,
-      draftId,
-      title: taskTitle,
-      progress: 0,
-      status: 'queued',
-      message: '正在排队建立数据流，验证本地微信公众号凭证密钥...',
-      timestamp: new Date().toISOString().replace('T', ' ').substring(11, 19),
-      syncedVersion: selectedAudience
-    };
-
-    setSyncTasks(prev => [initialTask, ...prev]);
-    addSystemLog('微信发布', `已添加公众号草稿同步同步任务，代号: ${taskId}`, 'info');
-
-    // Begin progress tracking tickers 
-    let currentProgress = 5;
-    const interval = setInterval(() => {
-      currentProgress += 25;
-      
-      setSyncTasks(prev => prev.map(t => {
-        if (t.id === taskId) {
-          if (currentProgress >= 100) {
-            clearInterval(interval);
-            
-            // Sync success - update drafts state too
-            setDrafts(curDrafts => curDrafts.map(d => {
-              if (d.id === draftId) {
-                return {
-                  ...d,
-                  status: 'synced',
-                  syncedTime: new Date().toISOString().replace('T', ' ').substring(0, 16),
-                  wechatMediaId: `media_wx_${Math.random().toString(36).substring(2, 12)}`
-                };
-              }
-              return d;
-            }));
-
-            addSystemLog('微信发布', `公众号草稿箱一键上传成功！同步文件: [${taskTitle.substring(0, 16)}...]。微信回填 MediaID 校验通过。`, 'success', 8000);
-
-            return {
-              ...t,
-              progress: 100,
-              status: 'completed',
-              message: '完成微信端同步：数据载荷顺利承接，草稿箱内已挂置。',
-              timestamp: new Date().toISOString().replace('T', ' ').substring(11, 19)
-            };
-          } else if (currentProgress === 30) {
-            return {
-              ...t,
-              progress: 30,
-              status: 'syncing',
-              message: '已连接至微信服务器。正在请求 API AccessToken...'
-            };
-          } else if (currentProgress === 55) {
-            return {
-              ...t,
-              progress: 55,
-              status: 'syncing',
-              message: '正在向微信官方CDN图床上传正文头图配图物料并锁定...'
-            };
-          } else {
-            return {
-              ...t,
-              progress: 80,
-              status: 'syncing',
-              message: '图文 Markdown 转换标准微信 HTML 并组装 XML 完成。向微信 /draft/add 接口推送 JSON 载荷...'
-            };
-          }
-        }
-        return t;
-      }));
-
-    }, 1200);
+    if (task.relatedEntityType === 'sourceItem') {
+      setFocusedSourceId(null);
+      setFocusedSourceItemId(payload?.sourceItemId || task.relatedEntityId);
+      setTab('sources');
+      return;
+    }
+    if (task.relatedEntityType === 'topic') {
+      const topicId = payload?.topicId || task.relatedEntityId;
+      setSelectedTopicIdForQueue(topicId);
+      setSelectedTopic(topicId);
+      setTab(tab === 'workshop' ? 'workshop' : 'topics');
+      return;
+    }
+    if (task.relatedEntityType === 'article') {
+      const articleId = payload?.articleId || task.relatedEntityId;
+      const article = articlesResource.data.find((item) => item.id === articleId);
+      setSelectedArticleIdForWorkshop(articleId);
+      setSelectedTopic(article?.topicId || null);
+      setTab('workshop');
+      return;
+    }
+    if (task.relatedEntityType === 'publishTask') {
+      const publishTaskId = payload?.publishTaskId || task.relatedEntityId;
+      const publishTask = publishResource.data.find((item) => item.id === publishTaskId);
+      setSelectedPublishTaskId(publishTaskId);
+      setSelectedDraftIdForPublish(publishTask?.article?.topicId || publishTask?.articleId || null);
+      setTab('publish');
+    }
   };
+
+  const handleSaveDraftToLibrary = (updatedDraft: AiDraft) => runAction('保存文章版本中...', async () => {
+    for (const audience of ['officeWorker', 'student', 'freelancer'] as Audience[]) {
+      const articleId = updatedDraft.articleIds?.[audience];
+      if (!articleId) continue;
+      const version = updatedDraft.versions[audience];
+      await articlesApi.update(articleId, {
+        title: version.title,
+        summary: version.excerpt,
+        markdown: version.content,
+        status: 'editing',
+      });
+    }
+    setTab('drafts');
+  });
+
+  const handleUpdateDraftStatus = (id: string, status: AiDraft['status'], score?: number, feedback?: string) => runAction('更新审核状态中...', async () => {
+    const draft = drafts.find((item) => item.id === id);
+    const articleId = draft?.articleIds?.[draft.selectedAudience];
+    if (!articleId) return;
+    if (status === 'approved') await articlesApi.approve(articleId, { qualityScore: score, comment: feedback });
+    else await articlesApi.update(articleId, { status, reviewerFeedback: feedback });
+  });
+
+  const handleExportDraftToPublish = async (draftId: string, score?: number, feedback?: string) => {
+    const draft = drafts.find((item) => item.id === draftId);
+    const articleId = draft?.articleIds?.[draft.selectedAudience];
+    if (!draft || !articleId) {
+      setNotice('请选择一篇已生成文章。');
+      return;
+    }
+    setNotice('正在质检并生成 dry-run 发布包...');
+    try {
+      await articlesApi.approve(articleId, { qualityScore: score, comment: feedback });
+      const quality = await articlesApi.qualityCheck(articleId);
+      if (!quality.passed) {
+        const highRisk = quality.issues.find((issue) => issue.severity === 'high');
+        setNotice(highRisk?.message || '质量检查未通过，请先修改文章。');
+        await refreshAll();
+        return;
+      }
+      const result = await articlesApi.createPublishPackage(articleId);
+      await refreshAll();
+      setSelectedPublishTaskId(result.publishTaskId);
+      setSelectedDraftIdForPublish(draft.id);
+      setTab('publish');
+      setNotice(result.reused ? '已有发布包，已进入微信发布中心。' : '发布包已生成，已进入微信发布中心。');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '生成发布包失败');
+    }
+  };
+
+  const handleDeleteDraft = (id: string) => runAction('标记文章为归档中...', async () => {
+    const draft = drafts.find((item) => item.id === id);
+    const articleId = draft?.articleIds?.[draft.selectedAudience];
+    if (articleId) await articlesApi.update(articleId, { status: 'failed' });
+  });
+
+  const handleTriggerWechatSync = (draftId: string) => runAction('创建 dry-run 草稿任务中...', async () => {
+    const draft = drafts.find((item) => item.id === draftId);
+    const articleId = draft?.articleIds?.[draft.selectedAudience];
+    if (!articleId) throw new Error('请选择一篇已生成文章。');
+    const task = await publishApi.create(articleId);
+    setSelectedPublishTaskId(task.id);
+    setSelectedDraftIdForPublish(draftId);
+  });
+
+  const handleCreatePublishPackage = async (articleId: string) => {
+    setNotice('正在生成发布包...');
+    try {
+      const result = await articlesApi.createPublishPackage(articleId);
+      await refreshAll();
+      setSelectedPublishTaskId(result.publishTaskId);
+      setSelectedDraftIdForPublish(result.task.article?.topicId || result.task.articleId);
+      setTab('publish');
+      setNotice(result.reused ? '当前版本已有发布包，已直接使用。' : result.statusText.join('，'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '生成发布包失败';
+      setNotice(message);
+    }
+  };
+
+  const handleSaveModelSetting = (setting: ModelSetting) => runAction('保存模型设置中...', () => settingsApi.update({
+    llmProvider: setting.provider === 'DeepSeek' ? 'deepseek' : 'kimi',
+    llmModel: setting.modelId,
+  }));
+
+  const handleSaveAppConfig = () => runAction('保存发布设置中...', () => settingsApi.update({ publishMode: 'dry_run' }));
+
+  const isInitialLoading = sourcesResource.loading || topicsResource.loading || articlesResource.loading;
+  const errorMessage = sourcesResource.error || topicsResource.error || articlesResource.error || publishResource.error || settingsResource.error || dashboardResource.error;
 
   return (
     <div id="saas-system-layout" className="flex h-screen bg-apple-bg text-apple-dark font-sans overflow-hidden antialiased select-none">
-      
-      {/* 1. Left Sidebar Navigation */}
-      <Sidebar 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab}
-        sources={sources}
-        topics={topics}
-        drafts={drafts}
-        appConfig={appConfig}
-      />
-
-      {/* 2. Main Frame */}
+      <Sidebar activeTab={activeTab} setActiveTab={setTab} sources={sources} topics={topics} drafts={drafts} appConfig={appConfig} />
       <main id="app-main-layout" className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        
-        {/* Top Header info bar */}
-        <Header 
-          activeTab={activeTab} 
-          appConfig={appConfig} 
-          onRefreshFeeds={handleRefreshGlobalFeeds}
-          isRefreshingFeeds={isRefreshingFeeds}
-        />
-
-        {/* Core Scroll View content layout */}
+        <Header activeTab={activeTab} appConfig={appConfig} onRefreshFeeds={handleRefreshGlobalFeeds} isRefreshingFeeds={isRefreshingFeeds} />
+        {(notice || errorMessage || isInitialLoading) && (
+          <div className="absolute top-18 right-6 z-40 rounded-2xl border border-apple-border bg-white px-4 py-2 text-xs font-semibold text-apple-dark shadow-lg">
+            {isInitialLoading ? '正在从 API 加载数据...' : errorMessage || notice}
+          </div>
+        )}
         <div id="viewport-pane" className="flex-1 overflow-y-auto p-8 bg-apple-bg">
-          {activeTab === 'dashboard' && (
-            <DashboardView 
-              sources={sources}
-              topics={topics}
-              drafts={drafts}
-              logs={logs}
-              appConfig={appConfig}
-              setActiveTab={setActiveTab}
-              setSelectedTopicIdForWorkshop={setSelectedTopicIdForWorkshop}
-            />
-          )}
-
-          {activeTab === 'sources' && (
-            <SourceCenterView 
-              sources={sources}
-              onAddSource={handleAddSource}
-              onDeleteSource={handleDeleteSource}
-              onToggleStatus={handleToggleSourceStatus}
-              isRefreshing={isRefreshingFeeds}
-              onTriggerCheck={handleVerifyCheckSource}
-            />
-          )}
-
-          {activeTab === 'topics' && (
-            <TopicWorkbenchView 
-              topics={topics}
-              onPushToWorkshop={handlePushToWorkshop}
-              onArchiveTopic={handleArchiveTopic}
-            />
-          )}
-
-          {activeTab === 'workshop' && (
-            <AiWorkshopView 
-              topics={topics}
-              drafts={drafts}
-              selectedTopicId={selectedTopicIdForWorkshop}
-              setSelectedTopicId={setSelectedTopicIdForWorkshop}
-              modelSetting={modelSetting}
-              onSaveDraft={handleSaveDraftToLibrary}
-              setActiveTab={setActiveTab}
-            />
-          )}
-
-          {activeTab === 'drafts' && (
-            <DraftLibraryView 
-              drafts={drafts}
-              onUpdateDraftStatus={handleUpdateDraftStatus}
-              onDeleteDraft={handleDeleteDraft}
-              setSelectedTopicIdForWorkshop={setSelectedTopicIdForWorkshop}
-              setSelectedDraftIdForPublish={setSelectedDraftIdForPublish}
-              setActiveTab={setActiveTab}
-            />
-          )}
-
-          {activeTab === 'publish' && (
-            <PublishCenterView 
-              drafts={drafts}
-              selectedDraftId={selectedDraftIdForPublish}
-              setSelectedDraftId={setSelectedDraftIdForPublish}
-              syncTasks={syncTasks}
-              onTriggerSyncTask={handleTriggerWechatSync}
-            />
-          )}
-
-          {activeTab === 'settings' && (
-            <SettingsView 
-              modelSetting={modelSetting}
-              appConfig={appConfig}
-              onSaveModelSetting={setModelSetting}
-              onSaveAppConfig={setAppConfig}
-            />
-          )}
+          {activeTab === 'dashboard' && <DashboardView sources={sources} topics={topics} drafts={drafts} logs={logs} appConfig={appConfig} setActiveTab={setTab} setSelectedTopicIdForWorkshop={setSelectedTopic} onTaskAction={handleTaskAction} onFetchToday={() => runAction('一键抓取今日内容中...', () => dailyApi.fetchToday())} />}
+          {activeTab === 'sources' && <SourceCenterView sources={sources} focusedSourceId={focusedSourceId} focusedSourceItemId={focusedSourceItemId} onAddSource={handleAddSource} onDeleteSource={handleDeleteSource} onPermanentDeleteSource={handlePermanentDeleteSource} onToggleStatus={handleToggleSourceStatus} isRefreshing={isRefreshingFeeds} onTriggerCheck={handleVerifyCheckSource} onFetchAllSources={handleFetchAllSources} onGenerateTopic={handleGenerateTopic} onGenerateSourceItemTopic={handleGenerateSourceItemTopic} />}
+          {activeTab === 'topics' && <TopicWorkbenchView topics={topics} drafts={drafts} selectedTopicId={selectedTopicIdForQueue} onPushToWorkshop={handlePushToWorkshop} onArchiveTopic={handleArchiveTopic} onOpenDraftLibrary={handleOpenDraftLibrary} setActiveTab={setTab} setSelectedTopicIdForWorkshop={setSelectedTopic} />}
+          {activeTab === 'workshop' && <AiWorkshopView topics={topics} drafts={drafts} selectedTopicId={selectedTopicIdForWorkshop} selectedArticleId={selectedArticleIdForWorkshop} setSelectedTopicId={setSelectedTopic} modelSetting={modelSetting} onSaveDraft={handleSaveDraftToLibrary} onGenerateArticle={handleGenerateArticle} onCreatePublishPackage={handleCreatePublishPackage} setActiveTab={setTab} />}
+          {activeTab === 'drafts' && <DraftLibraryView drafts={drafts} selectedDraftId={selectedDraftIdForLibrary} onUpdateDraftStatus={handleUpdateDraftStatus} onExportDraftToPublish={handleExportDraftToPublish} onDeleteDraft={handleDeleteDraft} setSelectedTopicIdForWorkshop={setSelectedTopic} setActiveTab={setTab} />}
+          {activeTab === 'publish' && <PublishCenterView drafts={drafts} selectedDraftId={selectedDraftIdForPublish} selectedPublishTaskId={selectedPublishTaskId} setSelectedDraftId={setSelectedDraftIdForPublish} setSelectedPublishTaskId={setSelectedPublishTaskId} syncTasks={syncTasks} onTriggerSyncTask={handleTriggerWechatSync} onRefresh={refreshAll} setActiveTab={setTab} />}
+          {activeTab === 'settings' && <SettingsView modelSetting={modelSetting} appConfig={appConfig} onSaveModelSetting={handleSaveModelSetting} onSaveAppConfig={handleSaveAppConfig} />}
         </div>
-
       </main>
     </div>
   );

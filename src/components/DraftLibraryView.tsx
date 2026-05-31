@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Library, 
   Search, 
@@ -26,19 +26,21 @@ import { AiDraft } from '../types';
 
 interface DraftLibraryViewProps {
   drafts: AiDraft[];
+  selectedDraftId?: string | null;
   onUpdateDraftStatus: (id: string, status: AiDraft['status'], score?: number, feedback?: string) => void;
+  onExportDraftToPublish: (id: string, score?: number, feedback?: string) => Promise<void>;
   onDeleteDraft: (id: string) => void;
   setSelectedTopicIdForWorkshop: (id: string | null) => void;
-  setSelectedDraftIdForPublish: (id: string | null) => void;
   setActiveTab: (tab: string) => void;
 }
 
 export default function DraftLibraryView({
   drafts,
+  selectedDraftId: selectedDraftIdFromApp,
   onUpdateDraftStatus,
+  onExportDraftToPublish,
   onDeleteDraft,
   setSelectedTopicIdForWorkshop,
-  setSelectedDraftIdForPublish,
   setActiveTab
 }: DraftLibraryViewProps) {
   
@@ -46,9 +48,16 @@ export default function DraftLibraryView({
   const [activeStatusTab, setActiveStatusTab] = useState<string>('ALL');
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(drafts[0]?.id || null);
 
+  useEffect(() => {
+    if (selectedDraftIdFromApp && drafts.some((draft) => draft.id === selectedDraftIdFromApp)) {
+      setSelectedDraftId(selectedDraftIdFromApp);
+    }
+  }, [selectedDraftIdFromApp, drafts]);
+
   // Score editing local state
   const [localFeedback, setLocalFeedback] = useState('');
   const [localScore, setLocalScore] = useState(5);
+  const [exportLoading, setExportLoading] = useState(false);
 
   const selectedDraft = drafts.find(d => d.id === selectedDraftId) || drafts[0];
 
@@ -63,15 +72,15 @@ export default function DraftLibraryView({
   const getStatusBadge = (status: AiDraft['status']) => {
     switch (status) {
       case 'generating':
-        return <span className="bg-neutral-50 text-neutral-600 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-neutral-100 animate-pulse">写入中</span>;
+        return <span className="bg-neutral-50 text-neutral-600 px-2 py-0.5 rounded text-badge-readable uppercase font-bold border border-neutral-100 animate-pulse">写入中</span>;
       case 'pending_review':
-        return <span className="bg-amber-50 text-amber-600 px-2 py-0.5 rounded text-[10px] uppercase font-extrabold border border-amber-100/40">待主审</span>;
+        return <span className="bg-amber-50 text-amber-600 px-2 py-0.5 rounded text-badge-readable uppercase font-extrabold border border-amber-100/40">待主审</span>;
       case 'approved':
-        return <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-emerald-100/40">已完备</span>;
+        return <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-badge-readable uppercase font-bold border border-emerald-100/40">已完备</span>;
       case 'synced':
-        return <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-blue-100/40">已灌入微信</span>;
+        return <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-badge-readable uppercase font-bold border border-blue-100/40">已导出 HTML</span>;
       case 'failed':
-        return <span className="bg-rose-50 text-rose-600 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-rose-100/40">同步失败</span>;
+        return <span className="bg-rose-50 text-rose-600 px-2 py-0.5 rounded text-badge-readable uppercase font-bold border border-rose-100/40">导出失败</span>;
       default:
         return null;
     }
@@ -80,11 +89,11 @@ export default function DraftLibraryView({
   const getAudienceTag = (aud: AiDraft['selectedAudience']) => {
     switch (aud) {
       case 'officeWorker':
-        return <span className="text-[10px] text-neutral-600 bg-neutral-100 px-2 py-0.5 rounded font-bold">打工人</span>;
+        return <span className="text-badge-readable text-neutral-600 bg-neutral-100 px-2 py-0.5 rounded font-bold">打工人</span>;
       case 'student':
-        return <span className="text-[10px] text-blue-600 bg-blue-50/50 px-2 py-0.5 rounded font-bold">大学生</span>;
+        return <span className="text-badge-readable text-blue-600 bg-blue-50/50 px-2 py-0.5 rounded font-bold">大学生</span>;
       case 'freelancer':
-        return <span className="text-[10px] text-purple-600 bg-purple-50/50 px-2 py-0.5 rounded font-bold">自雇自由人</span>;
+        return <span className="text-badge-readable text-purple-600 bg-purple-50/50 px-2 py-0.5 rounded font-bold">自雇自由人</span>;
     }
   };
 
@@ -97,12 +106,14 @@ export default function DraftLibraryView({
   };
 
   // Push immediate sync handle
-  const handlePublishSync = () => {
+  const handlePublishSync = async () => {
     if (!selectedDraft) return;
-    // Auto approve first
-    onUpdateDraftStatus(selectedDraft.id, 'approved', localScore, localFeedback || '内容准备发布。');
-    setSelectedDraftIdForPublish(selectedDraft.id);
-    setActiveTab('publish');
+    setExportLoading(true);
+    try {
+      await onExportDraftToPublish(selectedDraft.id, localScore, localFeedback || '内容准备发布。');
+    } finally {
+      setExportLoading(false);
+    }
   };
 
   const handleRewrite = () => {
@@ -118,13 +129,13 @@ export default function DraftLibraryView({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-apple-border rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
         
         {/* Tab filters */}
-        <div className="flex items-center space-x-1 p-0.5 rounded-xl bg-apple-bg border border-apple-border/50 text-xs font-semibold text-apple-muted overflow-x-auto">
+        <div className="flex items-center space-x-1 p-0.5 rounded-xl bg-apple-bg border border-apple-border/50 text-meta-readable font-semibold text-apple-muted overflow-x-auto">
           {[
             { id: 'ALL', label: '全部草稿库' },
             { id: 'pending_review', label: '待主审' },
             { id: 'approved', label: '已提审通过' },
-            { id: 'synced', label: '已同步微信' },
-            { id: 'failed', label: '同步失败' }
+            { id: 'synced', label: '已导出 HTML' },
+            { id: 'failed', label: '导出失败' }
           ].map(tab => (
             <button
               key={tab.id}
@@ -149,7 +160,7 @@ export default function DraftLibraryView({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="搜索草稿中文关键字、大纲、分类..."
-            className="w-full pl-9 pr-4 py-2 bg-apple-bg/50 hover:bg-apple-bg border border-apple-border focus:border-apple-blue/50 rounded-xl text-xs outline-none transition-all font-medium text-apple-dark placeholder-apple-muted/50"
+            className="w-full pl-9 pr-4 py-2 bg-apple-bg/50 hover:bg-apple-bg border border-apple-border focus:border-apple-blue/50 rounded-xl text-body-readable outline-none transition-all font-medium text-apple-dark placeholder-apple-muted/50"
           />
         </div>
       </div>
@@ -162,8 +173,8 @@ export default function DraftLibraryView({
           {filteredDrafts.length === 0 ? (
             <div className="p-12 text-center bg-white border border-apple-border rounded-[24px] flex flex-col items-center justify-center space-y-2 shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
               <Library className="h-8 w-8 text-apple-muted" />
-              <h4 className="text-xs font-bold text-apple-dark">没有查取到对应草稿</h4>
-              <p className="text-[10px] text-apple-muted">可以前往 ［AI写作工坊］ 进行全新创作生成</p>
+              <h4 className="text-section-title font-bold text-apple-dark">没有查取到对应草稿</h4>
+              <p className="text-caption-readable text-apple-muted">可以前往 ［AI写作工坊］ 进行全新创作生成</p>
             </div>
           ) : (
             filteredDrafts.map((draft) => {
@@ -191,14 +202,14 @@ export default function DraftLibraryView({
                   <div className="space-y-2 min-w-0 flex-1">
                     <div className="flex items-center space-x-2">
                       {getAudienceTag(draft.selectedAudience)}
-                      <span className="text-[10px] text-apple-muted font-mono">{draft.category}</span>
+                      <span className="text-caption-readable text-apple-muted font-mono">{draft.category}</span>
                     </div>
 
-                    <h4 className="text-xs font-bold text-apple-dark leading-snug line-clamp-2">
+                    <h4 className="text-card-title font-bold text-apple-dark leading-snug line-clamp-2">
                        {displayedTitle}
                     </h4>
 
-                    <div className="flex items-center space-x-2 text-[9px] font-mono text-apple-muted">
+                    <div className="flex items-center space-x-2 text-caption-readable font-mono text-apple-muted">
                       <span>字数计: {draft.versions[draft.selectedAudience].wordCount}</span>
                       <span>•</span>
                       <span>修改于 {draft.lastEdited}</span>
@@ -207,7 +218,7 @@ export default function DraftLibraryView({
 
                   <div className="flex flex-col items-end shrink-0 space-y-2 select-none">
                     {getStatusBadge(draft.status)}
-                    <span className="text-[10px] font-bold text-apple-dark font-mono flex items-center">
+                    <span className="text-meta-readable font-bold text-apple-dark font-mono flex items-center">
                       <Star className="h-3 w-3 fill-amber-400 text-amber-400 mr-0.5" />
                       <span>{draft.reviewScore ? `${draft.reviewScore}星` : '非标'}</span>
                     </span>
@@ -228,10 +239,10 @@ export default function DraftLibraryView({
                 <div className="flex items-start justify-between border-b border-apple-border pb-3">
                   <div className="space-y-1">
                     <div className="flex items-center space-x-2.5">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-apple-dark text-white font-mono">{selectedDraft.category}</span>
-                      <span className="text-[10px] text-apple-muted font-mono">ID: {selectedDraft.id}</span>
+                      <span className="text-badge-readable font-bold px-2 py-0.5 rounded bg-apple-dark text-white font-mono">{selectedDraft.category}</span>
+                      <span className="text-caption-readable text-apple-muted font-mono">ID: {selectedDraft.id}</span>
                     </div>
-                    <div className="text-[10px] text-apple-muted font-mono">对应原创题名: {selectedDraft.originalTitle}</div>
+                    <div className="text-caption-readable text-apple-muted font-mono">对应原创题名: {selectedDraft.originalTitle}</div>
                   </div>
 
                   <button
@@ -245,24 +256,24 @@ export default function DraftLibraryView({
 
                 {/* Subsections: view title content and summary excerpt */}
                 <div className="space-y-3 p-4 rounded-xl bg-apple-bg/55 border border-apple-border">
-                  <h3 className="text-xs font-bold text-apple-dark leading-normal">
+                  <h3 className="text-card-title font-bold text-apple-dark leading-normal">
                     {selectedDraft.versions[selectedDraft.selectedAudience].title}
                   </h3>
                   
-                  <blockquote className="border-l-2 border-apple-blue pl-3 text-[10px] italic text-apple-muted leading-relaxed font-semibold">
-                    微信正文摘要: “{selectedDraft.versions[selectedDraft.selectedAudience].excerpt}”
+                  <blockquote className="border-l-2 border-apple-blue pl-3 text-body-readable italic text-apple-muted leading-relaxed font-semibold">
+                    微信正文摘要: "{selectedDraft.versions[selectedDraft.selectedAudience].excerpt}"
                   </blockquote>
 
                   {/* HTML/Markdown View text snippets */}
-                  <div className="pt-2 text-[11px] leading-relaxed text-apple-dark space-y-2 whitespace-pre-wrap font-sans border-t border-apple-border/50">
-                    <strong className="text-apple-dark text-[10px] block mb-1">正文内容快览:</strong>
+                  <div className="pt-2 text-body-readable leading-relaxed text-apple-dark space-y-2 whitespace-pre-wrap font-sans border-t border-apple-border/50">
+                    <strong className="text-apple-dark text-caption-readable block mb-1">正文内容快览:</strong>
                     {selectedDraft.versions[selectedDraft.selectedAudience].content}
                   </div>
                 </div>
 
                 {/* System Feedback & Scoring history logs */}
-                <div className="p-3.5 bg-amber-50/45 border border-amber-200/50 rounded-xl text-[11px] text-[#A05A00] leading-relaxed font-semibold">
-                  <strong className="text-amber-800 font-bold block mb-1 text-[10px] flex items-center space-x-1">
+                <div className="p-3.5 bg-amber-50/45 border border-amber-200/50 rounded-xl text-body-readable text-[#A05A00] leading-relaxed font-semibold">
+                  <strong className="text-amber-800 font-bold block mb-1 text-caption-readable flex items-center space-x-1">
                     <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
                     <span>历史主编终审评语:</span>
                   </strong>
@@ -276,19 +287,19 @@ export default function DraftLibraryView({
                   
                   {/* Feedback comment input */}
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-apple-muted uppercase">填写审核评语/改动指示 (100字以内)</label>
+                    <label className="text-caption-readable font-bold text-apple-muted uppercase">填写审核评语/改动指示 (100字以内)</label>
                     <input
                       type="text"
                       value={localFeedback}
                       onChange={(e) => setLocalFeedback(e.target.value)}
-                      placeholder="写点改动建议给小编，如 “大标题可以再焦虑一些”..."
-                      className="w-full px-3 py-1.5 bg-apple-bg border border-apple-border focus:border-apple-blue/50 outline-none rounded-xl text-xs font-semibold text-apple-dark placeholder-apple-muted/50"
+                      placeholder="写点改动建议给小编，如 '大标题可以再焦虑一些'..."
+                      className="w-full px-3 py-1.5 bg-apple-bg border border-apple-border focus:border-apple-blue/50 outline-none rounded-xl text-body-readable font-semibold text-apple-dark placeholder-apple-muted/50"
                     />
                   </div>
 
                   {/* Stars choice */}
                   <div className="space-y-1">
-                    <div className="text-[10px] font-bold text-apple-muted uppercase mb-1">主编评分星级:</div>
+                    <div className="text-caption-readable font-bold text-apple-muted uppercase mb-1">主编评分星级:</div>
                     <div className="flex items-center space-x-1 px-1">
                       {[1, 2, 3, 4, 5].map(starNum => (
                         <button
@@ -305,7 +316,7 @@ export default function DraftLibraryView({
                           />
                         </button>
                       ))}
-                      <span className="font-mono text-xs font-bold text-apple-muted ml-2">{localScore} 星极佳</span>
+                      <span className="font-mono text-meta-readable font-bold text-apple-muted ml-2">{localScore} 星极佳</span>
                     </div>
                   </div>
 
@@ -316,7 +327,7 @@ export default function DraftLibraryView({
                   <div className="flex space-x-2">
                     <button
                       onClick={handleRewrite}
-                      className="px-3.5 py-1.5 rounded-xl border border-apple-border bg-white hover:bg-apple-bg text-apple-dark font-bold text-[11px] shadow-xs transition flex items-center space-x-1 cursor-pointer"
+                      className="px-3.5 py-1.5 rounded-xl border border-apple-border bg-white hover:bg-apple-bg text-apple-dark font-bold text-button-readable shadow-xs transition flex items-center space-x-1 cursor-pointer"
                     >
                       <PenTool className="h-3.5 w-3.5" />
                       <span>细节重写</span>
@@ -325,7 +336,7 @@ export default function DraftLibraryView({
                     <button
                       onClick={handleApprove}
                       id="draft-approve-status-btn"
-                      className="px-4 py-1.5 rounded-xl border border-[#34C759]/40 bg-[#34C759]/10 hover:bg-[#34C759]/15 text-[#34C759] font-bold text-[11px] shadow-xs transition flex items-center space-x-1 cursor-pointer"
+                      className="px-4 py-1.5 rounded-xl border border-[#34C759]/40 bg-[#34C759]/10 hover:bg-[#34C759]/15 text-[#34C759] font-bold text-button-readable shadow-xs transition flex items-center space-x-1 cursor-pointer"
                     >
                       <CheckCircle className="h-3.5 w-3.5" />
                       <span>审核同意并通过</span>
@@ -335,9 +346,10 @@ export default function DraftLibraryView({
                   <button
                     onClick={handlePublishSync}
                     id="draft-sync-direct-btn"
-                    className="px-4.5 py-1.5 rounded-xl bg-[#0066CC] hover:bg-apple-blue-hover text-white font-bold text-[11.5px] transition flex items-center space-x-1 shadow-xs cursor-pointer border border-[#0066CC]"
+                    disabled={exportLoading}
+                    className="px-4.5 py-1.5 rounded-xl bg-[#0066CC] hover:bg-apple-blue-hover text-white font-bold text-button-readable transition flex items-center space-x-1 shadow-xs cursor-pointer border border-[#0066CC]"
                   >
-                    <span>同步至微信中心</span>
+                    <span>{exportLoading ? '正在生成发布包...' : '前往 dry-run 导出'}</span>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>

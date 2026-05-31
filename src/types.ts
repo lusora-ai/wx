@@ -7,11 +7,21 @@ export interface SourceFeed {
   id: string;
   name: string;
   url: string;
-  type: 'RSS' | 'WEBSITE';
-  status: 'active' | 'inactive' | 'error';
+  type: 'manual' | 'url' | 'rss' | 'RSS' | 'WEBSITE';
+  status: 'pending' | 'extracted' | 'failed' | 'archived' | 'active' | 'inactive' | 'error';
   lastChecked: string;
   articleCount: number;
   category: string;
+  rawText?: string;
+  title?: string;
+  region?: 'domestic' | 'global';
+  items?: {
+    id: string;
+    title: string;
+    url?: string | null;
+    status: string;
+    createdAt: string;
+  }[];
 }
 
 export interface TopicArticle {
@@ -19,16 +29,23 @@ export interface TopicArticle {
   originalTitle: string;
   originalUrl: string;
   sourceId: string;
+  sourceItemId?: string;
   sourceName: string;
   pullTime: string;
   translatedTitle: string;
+  title?: string;
   summary: string;
   rawContent: string;
   englishOutline: string[];
   chineseOutline: string[];
+  facts?: string[];
+  uncertainClaims?: string[];
+  suggestedTitles?: string[];
+  targetAudiences?: string[];
+  angle?: string;
   category: string;
   readingTime: string; // e.g. "5 min"
-  status: 'pending' | 'pushed' | 'archived';
+  status: 'pending' | 'pushed' | 'approved' | 'rejected' | 'generated' | 'archived';
   hotScore: number; // 0-100
 }
 
@@ -39,9 +56,32 @@ export interface AudienceVersion {
   wordCount: number;
 }
 
+export type AudienceKey = 'officeWorker' | 'student' | 'freelancer';
+
+export interface ArticleImageSlot {
+  id: string;
+  articleId: string;
+  slotKey: string;
+  paragraphIndex: number;
+  marker: string;
+  reason: string;
+  promptZh: string;
+  promptEn?: string | null;
+  negativePrompt?: string | null;
+  aspectRatio: '16:9' | '4:3' | '1:1';
+  stylePreset: string;
+  altText?: string | null;
+  status: 'prompt_ready' | 'skipped';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AiDraft {
   id: string;
   topicId: string;
+  articleIds?: Partial<Record<AudienceKey, string>>;
+  imageSlots?: Partial<Record<AudienceKey, ArticleImageSlot[]>>;
+  visualPlans?: Partial<Record<AudienceKey, VisualPlan | null>>;
   originalTitle: string;
   translatedTitle: string;
   category: string;
@@ -50,8 +90,8 @@ export interface AiDraft {
     student: AudienceVersion;       // 大学生
     freelancer: AudienceVersion;    // 自由职业者
   };
-  selectedAudience: 'officeWorker' | 'student' | 'freelancer';
-  status: 'generating' | 'pending_review' | 'approved' | 'synced' | 'failed';
+  selectedAudience: AudienceKey;
+  status: 'generating' | 'draft' | 'editing' | 'pending_review' | 'review_pending' | 'approved' | 'exported' | 'synced' | 'failed';
   reviewScore: number; // 0-5
   reviewerFeedback: string;
   createdAt: string;
@@ -64,12 +104,82 @@ export interface AiDraft {
 export interface SyncTask {
   id: string;
   draftId: string;
+  articleId?: string;
   title: string;
   progress: number;
-  status: 'queued' | 'syncing' | 'completed' | 'failed';
+  status: 'queued' | 'syncing' | 'completed' | 'failed' | 'success' | 'pending' | 'running';
   message: string;
   timestamp: string;
+  outputHtml?: string;
+  outputMarkdown?: string;
+  packageJson?: string;
   syncedVersion: 'officeWorker' | 'student' | 'freelancer';
+}
+
+export interface PublishPackage {
+  title: string;
+  titleAlternatives?: string[];
+  summary: string;
+  markdown: string;
+  html: string;
+  privateDomainCta: string;
+  visualPlan?: VisualPlan | null;
+  visualPlanStatus?: 'ready' | 'stale' | 'missing' | 'failed';
+  noVisualPlan?: boolean;
+  imagePromptSet: {
+    cover: PublishImagePrompt;
+    inlineImages: PublishImagePrompt[];
+    socialShare: PublishImagePrompt | null;
+  } | null;
+  imagePromptCount: number;
+  imagePromptSource?: 'kimi-2.6' | 'deepseek-v4-pro-fallback' | 'local_template_fallback' | 'legacy' | 'none';
+  imagePromptWarnings?: string[];
+  imageSlots: {
+    slotKey: string;
+    promptZh: string;
+    promptEn: string;
+    negativePrompt: string;
+    aspectRatio: string;
+    stylePreset: string;
+    altText: string;
+  }[];
+  tags: string[];
+  cta: string;
+  aiDisclosure: boolean;
+  sourceUrl: string;
+}
+
+export interface PublishImagePrompt {
+  slot: 'cover' | `section_${number}` | 'section_1' | 'section_2' | 'section_3' | 'section_4' | 'summary_card' | 'social_share';
+  label: string;
+  purpose: string;
+  relatedSectionTitle?: string | null;
+  insertAfterParagraph?: number | null;
+  prompt: string;
+  negativePrompt: string;
+  suggestedRatio: '2.35:1' | '16:9' | '4:3' | '1:1' | '3:4';
+  placementHint: string;
+}
+
+export interface VisualPlan {
+  articleId: string;
+  articleVersion: number;
+  source: 'kimi_article_reading' | 'fallback_after_kimi_timeout' | 'fallback_after_kimi_error' | 'local_template_fallback';
+  generatedBy: 'kimi-2.6' | 'deepseek-v4-pro-fallback' | 'local_template_fallback';
+  basedOnArticleVersion: number;
+  generatedAt: string;
+  stale: boolean;
+  visualStrategy: {
+    overallStyle: string;
+    audienceFit: string;
+    avoid: string[];
+  };
+  imagePromptSet: {
+    cover: PublishImagePrompt;
+    inlineImages: PublishImagePrompt[];
+    socialShare: PublishImagePrompt;
+  };
+  warnings: string[];
 }
 
 export interface SystemLog {
@@ -83,7 +193,7 @@ export interface SystemLog {
 }
 
 export interface ModelSetting {
-  provider: 'Gemini' | 'Claude' | 'DeepSeek' | 'GPT-4o';
+  provider: 'DeepSeek' | 'Kimi';
   modelId: string;
   temperature: number;
   maxTokens: number;
