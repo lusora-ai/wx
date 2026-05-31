@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { SourceFeed, TopicArticle, AiDraft, SystemLog, AppConfig } from '../types';
 import { tasksApi, type ContentTask, type TodayTaskResponse } from '../api/tasks';
+import type { AutomationPipelineResult } from '../api/automation';
 
 interface DashboardViewProps {
   sources: SourceFeed[];
@@ -31,6 +32,7 @@ interface DashboardViewProps {
   setSelectedTopicIdForWorkshop: (id: string | null) => void;
   onTaskAction?: (task: ContentTask) => void;
   onFetchToday?: () => void;
+  onRunAutomation?: (fillWechat: boolean) => Promise<AutomationPipelineResult | null>;
 }
 
 const taskTypeLabel: Record<ContentTask['type'], string> = {
@@ -90,10 +92,13 @@ export default function DashboardView({
   setSelectedTopicIdForWorkshop,
   onTaskAction,
   onFetchToday,
+  onRunAutomation,
 }: DashboardViewProps) {
   const [todayTasks, setTodayTasks] = useState<TodayTaskResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
+  const [isRunningPipeline, setIsRunningPipeline] = useState(false);
+  const [pipelineResult, setPipelineResult] = useState<AutomationPipelineResult | null>(null);
   const [error, setError] = useState('');
 
   const hasRealData = sources.length > 0 || topics.length > 0 || drafts.length > 0 || logs.length > 0 || appConfig.monthlyTokenUsed > 0;
@@ -134,6 +139,22 @@ export default function DashboardView({
       await loadTasks();
     } finally {
       setIsFetching(false);
+    }
+  };
+
+  const handleRunAutomation = async (fillWechat: boolean) => {
+    if (!onRunAutomation) return;
+    setIsRunningPipeline(true);
+    setPipelineResult(null);
+    setError('');
+    try {
+      const result = await onRunAutomation(fillWechat);
+      if (result) setPipelineResult(result);
+      await loadTasks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '自动化流水线失败');
+    } finally {
+      setIsRunningPipeline(false);
     }
   };
 
@@ -203,6 +224,22 @@ export default function DashboardView({
               <Rss className={`h-4 w-4 ${isFetching ? 'animate-pulse' : ''}`} />
               <span>{isFetching ? '抓取中' : '抓取今日内容'}</span>
             </button>
+            <button
+              onClick={() => handleRunAutomation(false)}
+              disabled={!onRunAutomation || isRunningPipeline}
+              className="px-3 py-2 rounded-xl border border-apple-border bg-white text-apple-dark text-button-readable font-bold flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRunningPipeline ? 'animate-spin' : ''}`} />
+              <span>一键生产包</span>
+            </button>
+            <button
+              onClick={() => handleRunAutomation(true)}
+              disabled={!onRunAutomation || isRunningPipeline}
+              className="px-3 py-2 rounded-xl bg-neutral-900 text-white text-button-readable font-bold flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" />
+              <span>生产并填入微信</span>
+            </button>
           </div>
         </div>
 
@@ -231,6 +268,43 @@ export default function DashboardView({
             );
           })}
         </div>
+
+        {pipelineResult && (
+          <div className="mt-5 rounded-2xl border border-apple-border bg-apple-bg/35 p-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+              <div>
+                <div className="text-badge-readable font-bold text-apple-blue">自动化流水线</div>
+                <div className="text-card-title font-bold text-apple-dark mt-1">{pipelineResult.message}</div>
+              </div>
+              <span className={`px-2.5 py-1 rounded-lg border text-badge-readable font-bold ${
+                pipelineResult.status === 'blocked'
+                  ? 'border-amber-200 bg-amber-50 text-amber-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              }`}>
+                {pipelineResult.status === 'wechat_filled' ? '已填入微信' : pipelineResult.status === 'package_ready' ? '发布包就绪' : '已阻断'}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2 mt-3">
+              {pipelineResult.steps.map((item) => (
+                <div key={item.key} className="rounded-xl border border-apple-border bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-badge-readable font-bold text-apple-muted">{item.label}</span>
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                      item.status === 'done'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : item.status === 'blocked'
+                          ? 'bg-amber-50 text-amber-700'
+                          : 'bg-neutral-100 text-neutral-600'
+                    }`}>
+                      {item.status === 'done' ? '完成' : item.status === 'blocked' ? '阻断' : '跳过'}
+                    </span>
+                  </div>
+                  <div className="text-caption-readable text-apple-dark mt-1 line-clamp-2">{item.message}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Smart workflow suggestions */}
