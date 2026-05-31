@@ -8,6 +8,7 @@ import { markdownToWechatHtml } from '../server/services/html';
 import { normalizeGeneratedImageSlots, extractImageSlotKeys } from '../server/services/imageSlotPrompt';
 import { checkArticleQuality } from '../server/services/articleQuality';
 import { createDryRunPublishPackageFromArticle } from '../server/services/publishPackage';
+import { runAutomationPipeline } from '../server/services/automationPipeline';
 import { runEditorAgent } from '../server/services/ai/editor';
 import { runWriterAgent, type ArticleAIOutput } from '../server/services/ai/writer';
 import { jsonField, type Audience } from '../server/types/api';
@@ -386,6 +387,108 @@ async function main() {
       assert(publishPackage.package.imagePromptSource !== 'local_template_fallback', '不允许把本地模板伪装成正式 visualPlan。');
     }
     report.push(`6d. Phase 11 visualPlan 边界验证通过：status=${publishPackage.package.visualPlanStatus}, prompts=${publishPackage.package.imagePromptCount}`);
+
+    // 6e. Phase 16 自动化主线应优先续跑已有未完成文章，而不是重新从内容源开始。
+    const resumeMarkdown = `## 先处理已经进入后半程的稿件
+
+每天的内容生产并不总是从抓取开始。更常见的情况是，昨天已经生成了一篇稿子，今天只差质量检查、发布包或公众号编辑器填入。如果一键自动化每次都重新抓取、重新选题、重新写一篇，工作台会堆出重复内容，也会让用户分不清哪一篇才是应该推进的当前稿件。
+
+更稳的方式是先看系统里有没有已经进入后半程的文章。只要这篇文章内容完整、没有高风险问题，并且还没有完成发布包或公众号填入，就应该优先继续推进。这样用户点击一次按钮，得到的是当前生产链路的下一步结果，而不是又多出一个需要人工整理的新稿。
+
+{{IMAGE_SLOT:img_1}}
+
+## 为什么不能每次都从抓取重新开始
+
+内容源抓取适合发现新材料，但不应该覆盖正在推进的稿件。文章、质量记录和发布任务已经构成了明确的生产状态，后端应该根据这些状态判断下一步，而不是把前端按钮当成简单的重新生成入口。尤其在公众号场景里，一篇稿子从选题到发布包往往会经历多次编辑，重复生成会增加核对成本。
+
+续跑策略还可以减少模型调用。已经通过写作阶段的文章不需要重新请求正文生成模型，只需要补上质量检查、发布包和后续填入。这样既保留人工编辑痕迹，也能让自动化更接近日常工作节奏。
+
+## 公众号填入前还要保留人工判断
+
+即使发布包已经生成，系统也只能把内容填入公众号编辑器，并保持页面打开让用户检查。标题、正文、段落配图提示词和私域引导都需要人工确认后再保存。自动化可以减少复制粘贴，但不能替用户越过账号登录、风控、验证码或最终保存判断。
+
+这条边界让自动化更加可靠：系统负责把真实内容推进到可检查状态，用户负责最后的确认。关注小顺 AI 内容工作台，获取更多内容生产流程拆解。`;
+    const resumeCta = '关注小顺 AI 内容工作台，获取更多内容生产流程拆解。';
+    const resumeTopic = await prisma.topic.create({
+      data: {
+        sourceId: rssSource.id,
+        sourceItemId: sourceItem.id,
+        originalTitle: '内容自动化续跑验证材料',
+        originalUrl: null,
+        translatedTitle: '已有文章优先续跑',
+        title: '一键自动化应该先续跑已有稿件',
+        angle: '验证主线自动化的续跑策略',
+        summary: '已有文章应优先补齐质量检查和发布包。',
+        rawContent: '已有文章应优先续跑，避免重复生成新稿。',
+        facts: jsonField(['已有文章应优先续跑。', '发布包仍然保持 dry-run。']),
+        uncertainClaims: jsonField([]),
+        suggestedTitles: jsonField(['一键自动化应该先续跑已有稿件']),
+        targetAudiences: jsonField([audience]),
+        category: '流程验证',
+        hotScore: 70,
+        readingTime: '3 min',
+        status: 'pushed',
+      },
+    });
+    const resumeHtml = markdownToWechatHtml(resumeMarkdown, {
+      cta: resumeCta,
+      imageSlots: [{ slotKey: 'img_1' }],
+      aiDisclosureEnabled: true,
+    });
+    const resumeArticle = await prisma.article.create({
+      data: {
+        topicId: resumeTopic.id,
+        audience,
+        title: '一键自动化应该先续跑已有稿件',
+        summary: '验证无显式输入时优先续跑已有文章。',
+        markdown: resumeMarkdown,
+        html: resumeHtml,
+        cta: resumeCta,
+        status: 'draft',
+        imageSlots: {
+          create: [{
+            slotKey: 'img_1',
+            paragraphIndex: 3,
+            marker: '{{IMAGE_SLOT:img_1}}',
+            reason: '解释续跑策略的流程插图。',
+            promptZh: '一张公众号内容生产流程插图，表现已有文章从质量检查流向发布包，再流向公众号编辑器填入。不要文字、水印、logo、二维码。',
+            promptEn: 'A clean editorial workflow illustration showing an existing article moving from quality check to publish package and WeChat editor fill. No text, watermark, logo, or QR code.',
+            negativePrompt: '不要文字，不要水印，不要品牌 logo，不要二维码，不要真实人物肖像。',
+            aspectRatio: '16:9',
+            stylePreset: '公众号科技资讯插图',
+            altText: '已有文章续跑流程插图',
+          }],
+        },
+        versions: { create: { version: 1, title: '一键自动化应该先续跑已有稿件', markdown: resumeMarkdown, html: resumeHtml, changeType: 'e2e_generated' } },
+      },
+      include: { imageSlots: true },
+    });
+    const resumeQuality = checkArticleQuality({
+      title: resumeArticle.title,
+      markdown: resumeArticle.markdown,
+      cta: resumeArticle.cta,
+      imageSlots: resumeArticle.imageSlots.map((s) => ({ slotKey: s.slotKey, paragraphIndex: s.paragraphIndex })),
+      totalParagraphs: resumeArticle.markdown.split(/\n\s*\n/).filter((p) => p.trim()).length,
+    });
+    assert(resumeQuality.passed, `续跑文章质量检查应通过：${resumeQuality.issues.map((issue) => issue.type).join(', ')}`);
+    await prisma.reviewLog.create({ data: { articleId: resumeArticle.id, action: 'check', result: jsonField(resumeQuality) } });
+
+    if (!useAi) {
+      process.env.KIMI_API_KEY = '';
+      process.env.DEEPSEEK_API_KEY = '';
+    }
+    try {
+      const automationResult = await runAutomationPipeline({ audience });
+      assert(automationResult.articleId === resumeArticle.id, 'Phase 16 自动化未优先续跑最新合格文章。');
+      assert(automationResult.status === 'package_ready', `Phase 16 自动化状态异常：${automationResult.status}`);
+      assert(Boolean(automationResult.publishTaskId), 'Phase 16 自动化未生成 dry-run 发布包。');
+      assert(automationResult.boundary.wechatSaveAttempted === false, 'Phase 16 自动化不应尝试保存微信草稿。');
+      assert(automationResult.steps.some((item) => item.key === 'collect' && item.status === 'skipped'), 'Phase 16 续跑时应跳过内容源抓取。');
+    } finally {
+      process.env.KIMI_API_KEY = originalKimiApiKey;
+      process.env.DEEPSEEK_API_KEY = originalDeepSeekApiKey;
+    }
+    report.push(`6e. Phase 16 自动化续跑验证通过：article=${resumeArticle.id}`);
 
     // 8. 创建 FetchTask
     const fetchTask = await prisma.fetchTask.create({

@@ -3,7 +3,7 @@
 ## Phase 16 Mainline Automation API
 
 - `POST /api/automation/run` manually runs one PRD-bounded production pipeline: collect active content sources, select one qualified `SourceItem`, generate/reuse one `Topic`, generate/reuse one `Article`, run `ReviewLog.check`, create/reuse a dry-run `PublishTask`, and optionally call WeChat `inject-poc`.
-- Request body accepts `sourceId`, `sourceItemId`, `topicId`, or `articleId` to start from a specific point; otherwise the pipeline fetches active local sources and selects the highest quality unused candidate.
+- Request body accepts `sourceId`, `sourceItemId`, `topicId`, or `articleId` to start from a specific point. With no explicit object and `forceNewArticle !== true`, the pipeline first resumes the highest-priority unfinished real article for the audience, then falls back to fetching active local sources and selecting the highest quality unused candidate.
 - `audience` defaults to `officeWorker`; the pipeline generates at most one article per run.
 - `fillWechat:true` only fills the WeChat editor through `POST /api/wechat/drafts/inject-poc`. It never calls `save-poc`, never saves a draft, never mass publishes, and never schedules publishing.
 - HIGH quality risks block package creation and WeChat fill. MEDIUM/LOW risks are returned in `quality.issues` but do not block.

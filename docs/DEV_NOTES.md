@@ -4,7 +4,8 @@
 
 - Phase 16 adds the manual mainline automation runner: `POST /api/automation/run`.
 - The runner chains existing PRD objects only: `SourceItem -> Topic -> Article -> ArticleVersion -> ReviewLog -> PublishTask`.
-- It fetches active local sources, selects one qualified unused `SourceItem`, generates one article for one audience, quality-checks it, and creates/reuses a dry-run publish package.
+- With no explicit object and no `forceNewArticle`, the runner first resumes an existing real article that needs quality check, package creation, or WeChat fill. It fetches active local sources and selects one qualified unused `SourceItem` only when there is nothing safe to resume.
+- The runner generates one article for one audience, quality-checks it, and creates/reuses a dry-run publish package.
 - `fillWechat=true` is still only `inject-poc`: it fills the real WeChat editor and leaves the page open. It does not call `save-poc`.
 - The runner must stop on HIGH quality risks and return step evidence. MEDIUM/LOW risks do not block.
 - Keep all boundaries unchanged: no scheduled jobs, no batch article generation, no auto-save to WeChat, no official WeChat API, no image generation API, no login/multi-user/SaaS.

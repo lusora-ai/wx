@@ -6,6 +6,7 @@ import { checkContentQuality } from './fetch/contentQuality';
 import { runEditorAgent } from './ai/editor';
 import { generateArticlePipeline } from './articleGenerationPipeline';
 import { checkArticleQuality, type QualityResult } from './articleQuality';
+import { getArticleWorkflowStatus, type ArticleWorkflowStatus } from './articleWorkflowStatus';
 import { createDryRunPublishPackageFromArticle } from './publishPackage';
 import { injectWechatDraftPocStable, type WechatInjectResult } from './wechat/wechatPublisher';
 import { writeLog } from './logger';
@@ -62,6 +63,16 @@ type SourceItemWithSource = NonNullable<Awaited<ReturnType<typeof loadSourceItem
 const DEFAULT_AUDIENCE: Audience = 'officeWorker';
 const AUTO_MIN_SOURCE_SCORE = 60;
 const EXPLICIT_MIN_SOURCE_SCORE = 40;
+const TEST_PATTERNS = ['[DEV]', '[TEST]', '[MOCK]', 'E2E', '127.0.0.1', 'localhost'];
+
+function hasTestPattern(...fields: Array<string | null | undefined>) {
+  return fields
+    .filter(Boolean)
+    .some((field) => {
+      const normalized = field!.toLowerCase();
+      return TEST_PATTERNS.some((pattern) => normalized.includes(pattern.toLowerCase()));
+    });
+}
 
 function resolveAudience(value: unknown): Audience {
   return audiences.includes(value as Audience) ? value as Audience : DEFAULT_AUDIENCE;
@@ -202,6 +213,45 @@ async function loadSourceItem(id: string) {
   return prisma.sourceItem.findUnique({ where: { id }, include: { source: true } });
 }
 
+async function selectArticleForResume(input: AutomationPipelineInput, audience: Audience) {
+  if (input.sourceId || input.sourceItemId || input.topicId || input.articleId || input.forceNewArticle) return null;
+
+  const articles = await prisma.article.findMany({
+    where: { audience, status: { not: 'failed' } },
+    include: { topic: true },
+    orderBy: { updatedAt: 'desc' },
+    take: 50,
+  });
+
+  const candidates: Array<{
+    article: (typeof articles)[number];
+    workflow: ArticleWorkflowStatus;
+    priority: number;
+  }> = [];
+
+  for (const article of articles) {
+    if (hasTestPattern(article.title, article.summary, article.markdown, article.topic?.title, article.topic?.summary, article.topic?.rawContent)) continue;
+    const workflow = await getArticleWorkflowStatus(article.id);
+    if (!workflow) continue;
+
+    let priority = 0;
+    if (input.fillWechat && workflow.stage === 'waiting_manual_publish') priority = 70;
+    else if (input.fillWechat && workflow.stage === 'package_ready') priority = 65;
+    else if (workflow.stage === 'quality_passed') priority = 60;
+    else if (workflow.stage === 'needs_quality_check') priority = 55;
+    else if (workflow.stage === 'quality_outdated') priority = 50;
+    else if (workflow.stage === 'package_ready') priority = 45;
+    else if (workflow.stage === 'waiting_manual_publish') priority = 40;
+
+    if (priority > 0) candidates.push({ article, workflow, priority });
+  }
+
+  return candidates.sort((a, b) =>
+    b.priority - a.priority ||
+    b.article.updatedAt.getTime() - a.article.updatedAt.getTime()
+  )[0] ?? null;
+}
+
 async function collectSources(input: AutomationPipelineInput, steps: AutomationPipelineStep[]) {
   if (input.sourceItemId || input.topicId || input.articleId) {
     steps.push(step({
@@ -308,6 +358,7 @@ async function selectSourceItem(input: AutomationPipelineInput, steps: Automatio
     : [];
   const usedSourceItemIds = new Set(topics.map((topic) => topic.sourceItemId).filter(Boolean));
   const candidates = items
+    .filter((item) => !hasTestPattern(item.title, item.url, item.rawText, item.source?.name, item.source?.title, item.source?.url))
     .filter((item) => !usedSourceItemIds.has(item.id))
     .filter((item) => (item.qualityScore ?? 0) >= AUTO_MIN_SOURCE_SCORE)
     .sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0) || b.createdAt.getTime() - a.createdAt.getTime());
@@ -546,44 +597,97 @@ export async function runAutomationPipeline(input: AutomationPipelineInput): Pro
   const steps: AutomationPipelineStep[] = [];
   const audience = resolveAudience(input.audience);
 
-  await collectSources(input, steps);
-
-  const selectedItem = await selectSourceItem(input, steps);
-  if (input.sourceItemId && !selectedItem) {
-    const result = blockedResult({ message: '指定候选内容不可用于自动流水线。', steps });
-    await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
-    return result;
+  const resumed = await selectArticleForResume(input, audience);
+  if (resumed) {
+    steps.push(step({
+      key: 'collect',
+      label: '收集信息',
+      status: 'skipped',
+      message: '发现已有未完成文章，优先续跑当前生产链路。',
+    }));
+    steps.push(step({
+      key: 'select_source_item',
+      label: '选择候选内容',
+      status: 'skipped',
+      message: '复用已生成文章，跳过候选内容选择。',
+    }));
+    steps.push(step({
+      key: 'topic',
+      label: '生成选题',
+      status: resumed.article.topicId ? 'done' : 'skipped',
+      message: resumed.article.topic?.title ? `复用文章关联选题：${resumed.article.topic.title}` : '文章未关联选题，继续处理文章本身。',
+      entityType: resumed.article.topicId ? 'topic' : undefined,
+      entityId: resumed.article.topicId ?? undefined,
+    }));
+    steps.push(step({
+      key: 'article',
+      label: '生成文章',
+      status: 'done',
+      message: `续跑已有文章：${resumed.article.title}`,
+      entityType: 'article',
+      entityId: resumed.article.id,
+      details: { workflowStage: resumed.workflow.stage },
+    }));
   }
-  if (!selectedItem && !input.topicId && !input.articleId) {
-    const topic = await selectReusableTopic(audience, input.sourceId);
-    if (!topic) {
-      const result = blockedResult({ message: '没有可自动处理的候选内容或待写选题。', steps, sourceItemId: null });
+
+  if (!resumed) {
+    await collectSources(input, steps);
+
+    const selectedItem = await selectSourceItem(input, steps);
+    if (input.sourceItemId && !selectedItem) {
+      const result = blockedResult({ message: '指定候选内容不可用于自动流水线。', steps });
       await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
       return result;
     }
+    if (!selectedItem && !input.topicId && !input.articleId) {
+      const topic = await selectReusableTopic(audience, input.sourceId);
+      if (!topic) {
+        const result = blockedResult({ message: '没有可自动处理的候选内容或待写选题。', steps, sourceItemId: null });
+        await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
+        return result;
+      }
+    }
+
+    const topic = await resolveTopic(input, selectedItem, audience, steps);
+    if (!topic && !input.articleId) {
+      const result = blockedResult({ message: '选题阶段未得到可用结果，流水线已停止。', steps, sourceItemId: selectedItem?.id ?? null });
+      await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
+      return result;
+    }
+
+    const article = await resolveArticle(input, topic?.id ?? null, audience, steps);
+    if (!article) {
+      const result = blockedResult({ message: '文章阶段未得到可用结果，流水线已停止。', steps, sourceItemId: selectedItem?.id ?? null, topicId: topic?.id ?? null });
+      await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
+      return result;
+    }
+    return runArticleTail({ input, steps, selectedItemId: selectedItem?.id ?? null, topicId: topic?.id ?? article.topicId ?? null, article });
   }
 
-  const topic = await resolveTopic(input, selectedItem, audience, steps);
-  if (!topic && !input.articleId) {
-    const result = blockedResult({ message: '选题阶段未得到可用结果，流水线已停止。', steps, sourceItemId: selectedItem?.id ?? null });
-    await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
-    return result;
-  }
+  return runArticleTail({
+    input,
+    steps,
+    selectedItemId: resumed.workflow.sourceItemId,
+    topicId: resumed.article.topicId,
+    article: resumed.article,
+  });
+}
 
-  const article = await resolveArticle(input, topic?.id ?? null, audience, steps);
-  if (!article) {
-    const result = blockedResult({ message: '文章阶段未得到可用结果，流水线已停止。', steps, sourceItemId: selectedItem?.id ?? null, topicId: topic?.id ?? null });
-    await writeLog({ module: '自动化流水线', action: result.message, type: 'warning' });
-    return result;
-  }
-
+async function runArticleTail(input: {
+  input: AutomationPipelineInput;
+  steps: AutomationPipelineStep[];
+  selectedItemId: string | null;
+  topicId: string | null;
+  article: { id: string; topicId?: string | null };
+}) {
+  const { steps, article } = input;
   const quality = await runQualityCheck(article.id, steps);
   if (!quality.passed) {
     const result = blockedResult({
       message: '文章存在 HIGH 风险，已按 PRD 阻止发布包和微信填入。',
       steps,
-      sourceItemId: selectedItem?.id ?? null,
-      topicId: topic?.id ?? article.topicId ?? null,
+      sourceItemId: input.selectedItemId,
+      topicId: input.topicId ?? article.topicId ?? null,
       articleId: article.id,
       quality,
     });
@@ -607,7 +711,7 @@ export async function runAutomationPipeline(input: AutomationPipelineInput): Pro
   }));
 
   let wechat: WechatInjectResult | null = null;
-  if (input.fillWechat === true) {
+  if (input.input.fillWechat === true) {
     wechat = await injectWechatDraftPocStable(packageResult.publishTaskId);
     steps.push(step({
       key: 'wechat_fill',
@@ -622,8 +726,8 @@ export async function runAutomationPipeline(input: AutomationPipelineInput): Pro
       const result = blockedResult({
         message: '发布包已生成，但微信填入 gate 未通过。',
         steps,
-        sourceItemId: selectedItem?.id ?? null,
-        topicId: topic?.id ?? article.topicId ?? null,
+        sourceItemId: input.selectedItemId,
+        topicId: input.topicId ?? article.topicId ?? null,
         articleId: article.id,
         publishTaskId: packageResult.publishTaskId,
         quality,
@@ -649,8 +753,8 @@ export async function runAutomationPipeline(input: AutomationPipelineInput): Pro
     message: wechat?.success
       ? '已完成信息收集、文章生成、发布包生成，并填入微信公众号编辑器；尚未保存草稿。'
       : '已完成信息收集、文章生成和发布包生成，等待手动发布或微信填入。',
-    sourceItemId: selectedItem?.id ?? null,
-    topicId: topic?.id ?? article.topicId ?? null,
+    sourceItemId: input.selectedItemId,
+    topicId: input.topicId ?? article.topicId ?? null,
     articleId: article.id,
     publishTaskId: packageResult.publishTaskId,
     wechatRunId: wechat?.runId ?? null,
