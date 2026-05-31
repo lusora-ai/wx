@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Source {
+  id           String    @id @default(cuid())
+  type         String
+  name         String?
+  title        String?
+  url          String?
+  rawText      String
+  language     String?
+  sourceAuthor String?
+  publishedAt  DateTime?
+  status       String    @default("pending")
+  region       String    @default("global")
+  contentHash  String    @unique
+  articleCount Int       @default(0)
+  lastChecked  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  topics Topic[]
+  items  SourceItem[]
+}
+
+model SourceItem {
+  id            String   @id @default(cuid())
+  sourceId      String
+  source        Source   @relation(fields: [sourceId], references: [id])
+  title         String
+  url           String?
+  rawText       String
+  summary       String?
+  publishedAt   DateTime?
+  contentHash   String   @unique
+  status        String   @default("pending")
+  qualityScore  Int?
+  qualityIssues String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Topic {
+  id              String   @id @default(cuid())
+  sourceId        String?
+  source          Source?  @relation(fields: [sourceId], references: [id])
+  sourceItemId    String?
+  originalTitle   String?
+  originalUrl     String?
+  translatedTitle String?
+  title           String
+  angle           String?
+  summary         String
+  rawContent      String?
+  facts           String
+  uncertainClaims String?
+  suggestedTitles String?
+  targetAudiences String
+  category        String?
+  hotScore        Int?
+  readingTime     String?
+  status          String   @default("pending")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  articles Article[]
+}
+
+model Article {
+  id               String   @id @default(cuid())
+  topicId          String?
+  topic            Topic?   @relation(fields: [topicId], references: [id])
+  audience         String
+  title            String
+  summary          String?
+  markdown         String
+  html             String?
+  cta              String?
+  status           String   @default("draft")
+  currentVersion   Int      @default(1)
+  visualPlanJson   String?
+  tokenUsage       Int?
+  qualityScore     Int?
+  reviewerFeedback String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  versions     ArticleVersion[]
+  publishTasks PublishTask[]
+  imageSlots   ArticleImageSlot[]
+}
+
+model ArticleImageSlot {
+  id             String   @id @default(cuid())
+  articleId      String
+  article        Article  @relation(fields: [articleId], references: [id])
+  slotKey        String
+  paragraphIndex Int
+  marker         String
+  reason         String
+  promptZh       String
+  promptEn       String?
+  negativePrompt String?
+  aspectRatio    String   @default("16:9")
+  stylePreset    String   @default("公众号科技资讯插图")
+  altText        String?
+  status         String   @default("prompt_ready")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model ArticleVersion {
+  id         String   @id @default(cuid())
+  articleId  String
+  article    Article  @relation(fields: [articleId], references: [id])
+  version    Int
+  title      String
+  markdown   String
+  html       String?
+  changeType String
+  createdAt  DateTime @default(now())
+
+  @@unique([articleId, version])
+}
+
+model ReviewLog {
+  id        String   @id @default(cuid())
+  articleId String
+  action    String
+  result    String?
+  comment   String?
+  createdAt DateTime @default(now())
+}
+
+model PublishTask {
+  id             String   @id @default(cuid())
+  articleId      String
+  article        Article  @relation(fields: [articleId], references: [id])
+  channel        String   @default("wechat")
+  mode           String   @default("dry_run")
+  status         String   @default("pending")
+  title          String?
+  outputMarkdown String?
+  outputHtml     String?
+  packageJson    String?
+  errorCode      String?
+  errorMessage   String?
+  syncedVersion  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model FetchTask {
+  id           String    @id @default(cuid())
+  sourceId     String?
+  type         String
+  status       String    @default("pending")
+  total        Int       @default(0)
+  success      Int       @default(0)
+  failed       Int       @default(0)
+  message      String?
+  errorCode    String?
+  errorMessage String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model OperationLog {
+  id         String   @id @default(cuid())
+  module     String
+  action     String
+  type       String
+  operator   String?
+  tokensUsed Int?
+  createdAt  DateTime @default(now())
+}
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

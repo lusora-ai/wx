@@ -4,5 +4,10 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.err
 .env*
 !.env.example
+prisma/dev.db*
+.local/
+wechat-session*.json
+C*UsersLenovoAppDataLocalTemp*.json

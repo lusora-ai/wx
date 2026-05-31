@@ -3,294 +3,336 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { 
-  Lightbulb, 
-  Search, 
-  ArrowRight, 
-  Clock, 
-  TrendingUp, 
-  Archive, 
-  ExternalLink,
-  ChevronDown,
-  ChevronUp,
-  SlidersHorizontal,
-  Flame,
+import React, { useEffect, useState } from 'react';
+import {
+  Archive,
+  ArrowRight,
   CheckCircle2,
-  Bookmark,
-  FileText
+  ChevronDown,
+  ExternalLink,
+  FileText,
+  Lightbulb,
+  PenTool,
+  Search,
+  SlidersHorizontal,
 } from 'lucide-react';
-import { TopicArticle } from '../types';
+import type { AiDraft, TopicArticle } from '../types';
 
 interface TopicWorkbenchViewProps {
   topics: TopicArticle[];
+  drafts: AiDraft[];
+  selectedTopicId?: string | null;
   onPushToWorkshop: (id: string) => void;
   onArchiveTopic: (id: string) => void;
+  onOpenDraftLibrary: (draftId: string) => void;
+  setActiveTab: (tab: string) => void;
+  setSelectedTopicIdForWorkshop: (id: string | null) => void;
+}
+
+const TEST_PATTERNS = ['[DEV]', '[TEST]', '[MOCK]', 'E2E'];
+
+function isTestTopic(topic: TopicArticle): boolean {
+  const fields = [topic.title, topic.originalTitle, topic.translatedTitle, topic.summary].filter(Boolean);
+  return fields.some((field) => TEST_PATTERNS.some((pattern) => field.includes(pattern)));
+}
+
+function audienceLabel(key: string) {
+  if (key === 'officeWorker') return '打工人';
+  if (key === 'student') return '大学生';
+  if (key === 'freelancer') return '自由职业者';
+  return key;
 }
 
 export default function TopicWorkbenchView({
   topics,
+  drafts,
+  selectedTopicId,
   onPushToWorkshop,
-  onArchiveTopic
+  onArchiveTopic,
+  onOpenDraftLibrary,
+  setActiveTab,
+  setSelectedTopicIdForWorkshop,
 }: TopicWorkbenchViewProps) {
-  
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [minHotScore, setMinHotScore] = useState(0);
-  const [expandedTopicId, setExpandedTopicId] = useState<string | null>('topic-1'); // Default expand first for high-fidelity ease of assessment
+  const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null);
 
-  // Category and sorting logic
-  const categories = ['ALL', ...Array.from(new Set(topics.map(t => t.category)))];
+  // Show all non-test topics (sourceItemId is not required)
+  const queueTopics = topics.filter((topic) => !isTestTopic(topic));
+  const categories = ['ALL', ...Array.from(new Set(queueTopics.map((topic) => topic.category)))];
 
-  const filteredTopics = topics.filter(topic => {
-    const matchesSearch = topic.translatedTitle.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          topic.originalTitle.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          topic.summary.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredTopics = queueTopics.filter((topic) => {
+    const keyword = searchTerm.toLowerCase();
+    const matchesSearch =
+      topic.translatedTitle.toLowerCase().includes(keyword) ||
+      topic.originalTitle.toLowerCase().includes(keyword) ||
+      topic.summary.toLowerCase().includes(keyword);
     const matchesCategory = selectedCategory === 'ALL' || topic.category === selectedCategory;
     const matchesHot = topic.hotScore >= minHotScore;
-    
     return matchesSearch && matchesCategory && matchesHot;
   });
 
-  const toggleExpand = (id: string) => {
-    if (expandedTopicId === id) {
-      setExpandedTopicId(null);
-    } else {
-      setExpandedTopicId(id);
-    }
+  useEffect(() => {
+    if (!selectedTopicId) return;
+    window.setTimeout(() => {
+      document.getElementById(`topic-card-${selectedTopicId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }, [selectedTopicId, filteredTopics.length]);
+
+  const getDraft = (topicId: string) => drafts.find((draft) => draft.topicId === topicId);
+
+  const getWorkflowStatus = (topic: TopicArticle) => {
+    const draft = getDraft(topic.id);
+    if (!draft) return { label: '待送写作工坊', icon: PenTool };
+    if (draft.status === 'approved' || draft.status === 'exported' || draft.status === 'synced') return { label: '已进入草稿库', icon: CheckCircle2 };
+    if (draft.status === 'review_pending' || draft.status === 'pending_review') return { label: '需质检', icon: FileText };
+    return { label: '已生成文章', icon: FileText };
   };
+
+  const openWorkshop = (topicId: string) => {
+    setSelectedTopicIdForWorkshop(topicId);
+    setActiveTab('workshop');
+  };
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setSelectedCategory('ALL');
+    setMinHotScore(0);
+  };
+
+  const hasActiveFilters = searchTerm || selectedCategory !== 'ALL' || minHotScore > 0;
 
   return (
     <div id="topics-view-wrapper" className="space-y-6 container mx-auto px-1 py-1">
-      
-      {/* Dynamic Filter bar to match Apple Design system */}
-      <div className="bg-white border border-apple-border rounded-[24px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.02)] space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          
-          {/* Search phrase */}
-          <div className="relative w-full md:w-96">
-            <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-apple-muted" />
-            <input
-              type="text"
-              id="topic-search-input"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜索资讯、大纲关键词、原英文词组..."
-              className="w-full pl-9 pr-4 py-2 bg-apple-bg hover:bg-apple-bg border border-apple-border focus:border-apple-border focus:bg-white rounded-xl text-xs outline-none transition-all font-medium text-apple-dark placeholder-apple-muted/80"
-            />
+      <section className="bg-white border border-apple-border rounded-[24px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.02)] space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-section-title font-bold text-apple-dark">选题队列</h2>
+            <p className="text-caption-readable text-apple-muted mt-1">
+              显示所有真实选题，不显示测试数据。
+            </p>
           </div>
 
-          {/* Model Slider Hot selection */}
-          <div className="flex items-center space-x-6">
-            <div className="flex items-center space-x-2">
-              <SlidersHorizontal className="h-3.5 w-3.5 text-apple-muted" />
-              <span className="text-[11px] font-semibold text-apple-muted">热度阈值:</span>
-              <input 
-                type="range" 
-                min="0" 
-                max="90" 
-                value={minHotScore}
-                onChange={(e) => setMinHotScore(parseInt(e.target.value))}
-                className="w-24 h-1 bg-[#E5E5E7] rounded-lg appearance-none cursor-pointer accent-apple-blue" 
+          <div className="flex flex-col md:flex-row md:items-center gap-3">
+            <div className="relative w-full md:w-80">
+              <Search className="absolute left-3.5 top-3 h-4 w-4 text-apple-muted" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="搜索选题、来源、摘要..."
+                className="w-full pl-9 pr-4 py-2.5 bg-apple-bg border border-apple-border focus:bg-white rounded-xl text-body-readable outline-none font-medium text-apple-dark placeholder-apple-muted"
               />
-              <span className="font-mono text-xs font-bold text-apple-dark">{minHotScore}+</span>
             </div>
-
-            <div className="h-4 w-[1px] bg-apple-border/50"></div>
-
-            <div className="flex items-center space-x-1 p-0.5 rounded-xl bg-apple-bg border border-apple-border/50 text-xs font-semibold text-apple-muted">
-              {categories.map(cat => (
-                <button
-                  key={cat}
-                  onClick={() => setSelectedCategory(cat)}
-                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer whitespace-nowrap ${
-                    selectedCategory === cat 
-                      ? 'bg-white text-apple-dark shadow-xs font-semibold' 
-                      : 'hover:text-apple-dark text-apple-muted'
-                  }`}
-                >
-                  {cat === 'ALL' ? '全部领域' : cat}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4 text-apple-muted" />
+              <span className="text-meta-readable font-semibold text-apple-muted">热度</span>
+              <input
+                type="range"
+                min="0"
+                max="90"
+                value={minHotScore}
+                onChange={(event) => setMinHotScore(Number(event.target.value))}
+                className="w-24 h-1 bg-[#E5E5E7] rounded-lg appearance-none cursor-pointer accent-apple-blue"
+              />
+              <span className="font-mono text-body-readable font-bold text-apple-dark">{minHotScore}+</span>
             </div>
           </div>
-
         </div>
-      </div>
 
-      {/* Row list of Topic Articles */}
-      <div id="topics-list-container" className="space-y-4">
+        <div className="flex items-center gap-2 overflow-x-auto">
+          {categories.map((category) => (
+            <button
+              key={category}
+              onClick={() => setSelectedCategory(category)}
+              className={`px-3 py-1.5 rounded-xl border text-body-readable font-bold whitespace-nowrap ${
+                selectedCategory === category
+                  ? 'bg-apple-blue text-white border-[#0066CC]'
+                  : 'bg-white text-apple-dark border-apple-border hover:bg-apple-bg'
+              }`}
+            >
+              {category === 'ALL' ? '全部领域' : category}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-4">
         {filteredTopics.length === 0 ? (
-          <div className="p-12 text-center bg-white border border-apple-border rounded-[24px] flex flex-col items-center justify-center space-y-2">
+          <div className="p-12 text-center bg-white border border-apple-border rounded-[24px] flex flex-col items-center justify-center space-y-3">
             <Lightbulb className="h-8 w-8 text-apple-muted/65" />
-            <h4 className="text-xs font-bold text-apple-dark">没有找到匹配的资讯选题</h4>
-            <p className="text-[10px] text-apple-muted">请尝试放宽筛选词或者在右上角再次进行海外 RSS 抓取</p>
+            {queueTopics.length === 0 ? (
+              <>
+                <h4 className="text-card-title font-bold text-apple-dark">还没有选题</h4>
+                <p className="text-meta-readable text-apple-muted">请先在内容源中心添加内容源并抓取，然后生成选题。</p>
+                <button
+                  onClick={() => setActiveTab('sources')}
+                  className="px-4 py-2 rounded-xl bg-apple-blue text-white text-button-readable font-bold"
+                >
+                  去内容源中心
+                </button>
+              </>
+            ) : hasActiveFilters ? (
+              <>
+                <h4 className="text-card-title font-bold text-apple-dark">当前筛选条件下没有选题</h4>
+                <p className="text-meta-readable text-apple-muted">共 {queueTopics.length} 个选题，但不匹配当前筛选条件。</p>
+                <button
+                  onClick={clearFilters}
+                  className="px-4 py-2 rounded-xl border border-apple-border bg-white text-apple-dark text-button-readable font-bold"
+                >
+                  清空筛选
+                </button>
+              </>
+            ) : (
+              <>
+                <h4 className="text-card-title font-bold text-apple-dark">暂无真实选题队列</h4>
+                <p className="text-meta-readable text-apple-muted">请先在候选内容池从 SourceItem 生成选题。</p>
+              </>
+            )}
           </div>
         ) : (
           filteredTopics.map((topic) => {
-            const isExpanded = expandedTopicId === topic.id;
-            const isPushed = topic.status === 'pushed';
-            const isArchived = topic.status === 'archived';
+            const draft = getDraft(topic.id);
+            const status = getWorkflowStatus(topic);
+            const StatusIcon = status.icon;
+            const targetAudiences = (topic.targetAudiences || []).map(audienceLabel).join(' / ') || '待定';
+            const isSourceExpanded = expandedSourceId === topic.id;
+            const rawContentPreview = topic.rawContent?.slice(0, 600) || '';
+            const hasMoreContent = (topic.rawContent?.length || 0) > 600;
 
             return (
-              <div 
+              <article
                 key={topic.id}
-                id={`topic-row-${topic.id}`}
-                className={`bg-white border rounded-[24px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] transition-all ${
-                  isExpanded 
-                    ? 'border-apple-border/90' 
-                    : 'border-apple-border/60 hover:border-apple-border'
-                } ${isArchived ? 'opacity-65' : ''}`}
+                id={`topic-card-${topic.id}`}
+                className={`bg-white border rounded-[24px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.02)] space-y-4 ${
+                  selectedTopicId === topic.id ? 'border-apple-blue ring-2 ring-blue-100' : 'border-apple-border'
+                }`}
               >
-                {/* Header Row */}
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-1.5 flex-1 select-text">
-                    <div className="flex items-center space-x-2.5">
-                      <span className="text-[9px] font-bold font-mono tracking-wider px-2 py-0.5 rounded bg-apple-dark text-white leading-none">
-                        {topic.category}
+                <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-badge-readable font-bold px-2 py-0.5 rounded bg-apple-dark text-white">{topic.category}</span>
+                      <span className="text-badge-readable font-bold px-2 py-0.5 rounded bg-blue-50 text-apple-blue border border-blue-100 flex items-center gap-1">
+                        <StatusIcon className="h-3.5 w-3.5" />
+                        {status.label}
                       </span>
-                      <span className="text-[10px] text-apple-muted font-mono flex items-center space-x-1 font-medium">
-                        <Clock className="h-3 w-3" />
-                        <span>抓取于 {topic.pullTime}</span>
-                      </span>
-                      <span className="text-[10px] text-apple-muted font-mono font-medium">
-                        • {topic.readingTime} 英文阅读时长
-                      </span>
+                      <span className="text-caption-readable text-apple-muted font-mono">热度 {topic.hotScore}</span>
+                      {!topic.sourceItemId && (
+                        <span className="text-caption-readable text-amber-600 font-mono">无来源绑定</span>
+                      )}
                     </div>
-
-                    <h3 className="text-xs font-bold text-apple-dark pr-4 leading-normal mt-1">
-                      {topic.translatedTitle}
-                    </h3>
-                    
-                    <p className="text-[10px] font-mono text-apple-muted line-clamp-1 italic max-w-4xl tracking-tight">
-                      EN: {topic.originalTitle}
-                    </p>
+                    <h3 className="text-card-title font-bold text-apple-dark mt-2 leading-snug">{topic.translatedTitle}</h3>
+                    <p className="text-caption-readable text-apple-muted mt-1 truncate">来源文章：{topic.originalTitle}</p>
                   </div>
 
-                  {/* Hot meter & Toggle actions */}
-                  <div className="flex items-center space-x-3 shrink-0">
-                    <div className="flex items-center space-x-1 bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-lg px-2 py-1 select-none text-[10px] font-sans font-bold">
-                      <Flame className="h-3.5 w-3.5 fill-amber-500 text-amber-500 animate-pulse" />
-                      <span>热度 {topic.hotScore}</span>
-                    </div>
-
-                    <button 
-                      onClick={() => toggleExpand(topic.id)}
-                      className="p-1.5 rounded-lg border border-apple-border hover:bg-apple-bg text-apple-muted hover:text-apple-dark transition-all cursor-pointer"
-                    >
-                      {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Always visible Abstract Summary */}
-                <div className="mt-3.5 p-3.5 rounded-2xl bg-apple-bg border border-apple-border/40 text-[11px] leading-relaxed text-apple-dark font-medium select-text">
-                  <strong className="text-apple-dark font-bold block mb-1 text-[10px] tracking-wide">AI 提炼之中文摘要：</strong>
-                  {topic.summary}
-                </div>
-
-                {/* Collapsible Outlines comparison zone */}
-                {isExpanded && (
-                  <div id={`topic-expanded-${topic.id}`} className="mt-5 pt-4 border-t border-apple-border/50 grid grid-cols-1 md:grid-cols-2 gap-5 animate-fade-in">
-                    
-                    {/* Chinese Outline */}
-                    <div className="p-4 rounded-xl border border-apple-border/40 bg-apple-bg/30">
-                      <h4 className="text-[10px] font-bold text-apple-dark uppercase tracking-wider mb-2.5 flex items-center space-x-1">
-                        <FileText className="h-3.5 w-3.5 text-apple-blue" />
-                        <span>AI 预排版中文大纲 (参考)</span>
-                      </h4>
-                      <ul className="space-y-2 list-none text-[11px] text-apple-dark">
-                        {topic.chineseOutline.map((line, idx) => (
-                          <li key={idx} className="flex items-start space-x-1.5 font-medium leading-relaxed">
-                            <span className="font-mono text-[10px] font-extrabold text-apple-blue mt-0.5 whitespace-nowrap">{idx+1}.</span>
-                            <span>{line}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    {/* Original English Outline */}
-                    <div className="p-4 rounded-xl border border-apple-border/40 bg-apple-bg/10 font-mono">
-                      <h4 className="text-[10px] font-bold text-apple-muted uppercase tracking-wider mb-2.5 flex items-center space-x-1">
-                        <Bookmark className="h-3.5 w-3.5 text-apple-muted/80" />
-                        <span>Original English Syllabus</span>
-                      </h4>
-                      <ul className="space-y-2 list-none text-[11px] text-apple-muted">
-                        {topic.englishOutline.map((line, idx) => (
-                          <li key={idx} className="flex items-start space-x-1.5 leading-relaxed">
-                            <span className="text-[10px] font-bold text-apple-muted/50 mt-0.5 whitespace-nowrap">{idx+1}.</span>
-                            <span>{line}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                  </div>
-                )}
-
-                {/* Action Controls footer */}
-                <div className="mt-4 pt-3.5 border-t border-apple-border/40 flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-[10px] font-mono text-apple-muted font-medium">
-                    <span>源站点代号: {topic.sourceId}</span>
-                    <span>•</span>
-                    <a 
-                      href={topic.originalUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-apple-muted hover:text-apple-dark hover:underline flex items-center space-x-0.5 cursor-pointer"
-                    >
-                      <span>访问英文源址</span>
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    {/* Archive toggle */}
-                    {!isPushed && (
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {!draft ? (
+                      <button
+                        onClick={() => {
+                          if (topic.status !== 'pushed') onPushToWorkshop(topic.id);
+                          openWorkshop(topic.id);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-apple-blue text-white text-button-readable font-bold flex items-center gap-1.5"
+                      >
+                        <span>推送到写作工坊</span>
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => openWorkshop(topic.id)}
+                          className="px-4 py-2 rounded-xl border border-apple-border bg-white text-apple-dark text-button-readable font-bold flex items-center gap-1.5"
+                        >
+                          <FileText className="h-4 w-4" />
+                          <span>查看文章</span>
+                        </button>
+                        <button
+                          onClick={() => onOpenDraftLibrary(draft.id)}
+                          className="px-4 py-2 rounded-xl bg-apple-blue text-white text-button-readable font-bold flex items-center gap-1.5"
+                        >
+                          <span>进入内容与草稿库</span>
+                          <ArrowRight className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
+                    {topic.status !== 'pushed' && topic.status !== 'archived' && (
                       <button
                         onClick={() => onArchiveTopic(topic.id)}
-                        className={`text-xs px-3 py-1.5 rounded-xl border font-bold transition-all cursor-pointer flex items-center space-x-1 ${
-                          isArchived
-                            ? 'border-apple-border bg-apple-bg text-apple-dark'
-                            : 'border-apple-border text-apple-muted hover:text-apple-dark hover:bg-apple-bg'
-                        }`}
+                        className="p-2 rounded-xl border border-apple-border text-apple-muted hover:bg-apple-bg"
+                        title="归档"
                       >
-                        <Archive className="h-3.5 w-3.5" />
-                        <span>{isArchived ? '已归档' : '归档'}</span>
+                        <Archive className="h-4 w-4" />
                       </button>
                     )}
-
-                    {/* Push forward write */}
-                    <button
-                      onClick={() => onPushToWorkshop(topic.id)}
-                      disabled={isPushed}
-                      className={`text-xs font-bold px-4 py-1.5 rounded-xl transition-all cursor-pointer flex items-center space-x-1 shadow-xs ${
-                        isPushed 
-                          ? 'bg-apple-bg border border-apple-border text-apple-muted cursor-not-allowed' 
-                          : 'bg-apple-blue hover:bg-apple-blue-hover text-white border border-[#0066CC] font-bold'
-                      }`}
-                    >
-                      {isPushed ? (
-                        <>
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                          <span>已进入写作队列</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>推送至 AI 写作工坊</span>
-                          <ArrowRight className="h-3.5 w-3.5" />
-                        </>
-                      )}
-                    </button>
                   </div>
                 </div>
 
-              </div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                  <div className="rounded-2xl border border-apple-border bg-apple-bg/35 p-3 lg:col-span-2">
+                    <div className="text-meta-readable font-bold text-apple-dark mb-1">推荐角度</div>
+                    <p className="text-body-readable text-apple-dark leading-relaxed">{topic.angle || topic.summary}</p>
+                  </div>
+                  <div className="rounded-2xl border border-apple-border bg-white p-3">
+                    <div className="text-meta-readable font-bold text-apple-muted mb-1">目标受众</div>
+                    <p className="text-body-readable font-bold text-apple-dark">{targetAudiences}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-apple-border bg-white p-3">
+                  <div className="text-meta-readable font-bold text-apple-muted mb-1">摘要</div>
+                  <p className="text-body-readable text-apple-dark leading-relaxed">{topic.summary}</p>
+                  <div className="flex items-center gap-3 mt-2">
+                    {topic.originalUrl && (
+                      <a
+                        href={topic.originalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-caption-readable font-bold text-apple-blue hover:underline"
+                      >
+                        <span>查看原文</span>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    )}
+                    {topic.rawContent && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedSourceId(isSourceExpanded ? null : topic.id)}
+                        className="inline-flex items-center gap-1 text-caption-readable font-bold text-apple-muted hover:text-apple-dark transition"
+                      >
+                        <span>{isSourceExpanded ? '收起来源内容' : '查看来源内容'}</span>
+                        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isSourceExpanded ? 'rotate-180' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expandable source content */}
+                {isSourceExpanded && topic.rawContent && (
+                  <div className="rounded-2xl border border-apple-border bg-apple-bg/35 p-4 space-y-2">
+                    <div className="text-meta-readable font-bold text-apple-dark">来源内容</div>
+                    <p className="text-body-readable text-apple-dark leading-relaxed whitespace-pre-wrap select-text">
+                      {rawContentPreview}
+                    </p>
+                    {hasMoreContent && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedSourceId(null)}
+                        className="text-caption-readable font-bold text-apple-blue hover:underline"
+                      >
+                        内容较长，点击收起
+                      </button>
+                    )}
+                    {!hasMoreContent && topic.rawContent.length > 0 && (
+                      <p className="text-caption-readable text-apple-muted">共 {topic.rawContent.length} 字</p>
+                    )}
+                  </div>
+                )}
+              </article>
             );
           })
         )}
-      </div>
-
+      </section>
     </div>
   );
 }

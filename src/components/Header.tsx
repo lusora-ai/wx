@@ -71,26 +71,26 @@ export default function Header({
     },
     publish: { 
       title: '微信发布中心', 
-      subtitle: '模拟微信官方公众号界面呈现，查看排版，监测批次自动同步，拉取后台 MediaId。' 
+      subtitle: '生成公众号兼容 HTML，支持复制和下载后手动粘贴到微信后台草稿箱。' 
     },
     settings: { 
       title: '控制台设置', 
-      subtitle: '设置底座模型参数 (如 Gemini), 绑定微信 AppID 密钥，以及精细化微调多受众的特色注入 Prompt。' 
+      subtitle: '设置模型名称、默认语气和导出偏好；API Key 只允许在服务端 .env 中配置。' 
     }
   };
 
   const activeDetails = tabDetails[activeTab] || { title: '工作台', subtitle: '管理后台' };
 
   return (
-    <header id="header-container" className="h-16 bg-white/50 backdrop-blur-md border-b border-apple-border px-8 flex items-center justify-between select-none shrink-0">
+    <header id="header-container" className="h-16 bg-white/80 border-b border-apple-border px-8 flex items-center justify-between select-none shrink-0">
       {/* Page Title & Sub */}
       <div className="flex flex-col">
-        <h1 id="header-page-title" className="text-sm font-bold text-apple-dark tracking-tight flex items-center space-x-2">
+        <h1 id="header-page-title" className="text-section-title tracking-tight flex items-center space-x-2">
           <span>{activeDetails.title}</span>
           <span className="h-1.5 w-1.5 rounded-full bg-apple-border/65"></span>
-          <span className="text-[10px] text-apple-blue font-mono tracking-wider font-semibold uppercase">{activeTab}</span>
+          <span className="text-caption-readable text-apple-blue font-mono tracking-wider font-semibold uppercase">{activeTab}</span>
         </h1>
-        <p id="header-page-subtitle" className="text-[11px] text-apple-muted font-medium truncate max-w-lg md:max-w-2xl">{activeDetails.subtitle}</p>
+        <p id="header-page-subtitle" className="text-meta-readable truncate max-w-lg md:max-w-2xl">{activeDetails.subtitle}</p>
       </div>
 
       {/* Utilities Container */}
@@ -100,23 +100,23 @@ export default function Header({
           onClick={onRefreshFeeds}
           disabled={isRefreshingFeeds}
           id="global-feed-refresh-btn"
-          className="flex items-center space-x-1.5 px-4.5 py-1.5 rounded-full border border-apple-border hover:border-apple-border bg-white shadow-xs hover:bg-apple-bg transition-all text-xs font-semibold text-apple-dark cursor-pointer disabled:opacity-50"
+          className="flex items-center space-x-1.5 px-4.5 py-1.5 rounded-full border border-apple-border hover:border-apple-border bg-white shadow-xs hover:bg-apple-bg transition-all text-button-readable text-apple-dark cursor-pointer disabled:opacity-50"
         >
-          <RefreshCw className={`h-3 w-3 ${isRefreshingFeeds ? 'animate-spin text-apple-blue' : 'text-apple-muted'}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingFeeds ? 'animate-spin text-apple-blue' : 'text-apple-muted'}`} />
           <span>{isRefreshingFeeds ? '正在下载海外资讯...' : '同步海外资讯'}</span>
         </button>
 
          {/* Real-time Clock */}
-        <div id="system-clock-display" className="hidden lg:flex items-center space-x-2 px-4 py-1.5 rounded-full bg-apple-bg border border-apple-border/50 font-mono text-xs text-apple-muted">
-          <Clock className="h-3 w-3 text-apple-muted" />
+        <div id="system-clock-display" className="hidden lg:flex items-center space-x-2 px-4 py-1.5 rounded-full bg-apple-bg border border-apple-border/50 font-mono text-meta-readable">
+          <Clock className="h-3.5 w-3.5 text-apple-muted" />
           <span>{timeStr}</span>
         </div>
 
         {/* WeChat Sync Quick Badge */}
-        <div id="wechat-badge-indicator" className="flex items-center space-x-1.5 text-xs font-medium text-apple-muted">
+        <div id="wechat-badge-indicator" className="flex items-center space-x-1.5 text-meta-readable font-medium">
           <div className={`h-2.5 w-2.5 rounded-full ${appConfig.wechatIsConfigured ? 'bg-emerald-500 shadow-xs shadow-emerald-500/20' : 'bg-[#D2D2D7]'}`}></div>
-          <span className="hidden sm:inline">微信网关:</span>
-          <span className="font-semibold text-apple-dark">{appConfig.wechatIsConfigured ? '已连接' : '未联通'}</span>
+          <span className="hidden sm:inline">发布模式:</span>
+          <span className="font-semibold text-apple-dark">dry-run</span>
         </div>
       </div>
     </header>
